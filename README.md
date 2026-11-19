@@ -5,7 +5,7 @@ Staff-shared Magic card inventory with Card Kingdom pricing.
 - `site/` – the app (GitHub Pages). `config.js` holds the inventory sheet's web address.
 - `apps-script/Code.gs` – the shared backend, run by Google Apps Script on the inventory Google Sheet.
 - `scripts/build-prices.mjs` – downloads the Card Kingdom price list and slims it to `prices.json`.
-- `.github/workflows/publish.yml` – publishes the app with fresh prices every night at about 3 AM Pacific, and whenever the files change.
+- `.github/workflows/publish.yml` – publishes the app with fresh prices every 6 hours (about 10 AM, 4 PM, 10 PM and 4 AM Pacific), and whenever the files change.
 
 ## One-time setup
 
