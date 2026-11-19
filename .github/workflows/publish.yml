@@ -1,10 +1,10 @@
 # Publishes the app to GitHub Pages with a fresh Card Kingdom price file.
-# Runs every night, whenever the app files change, and on demand (Actions tab > Publish > Run workflow).
+# Runs every 6 hours, whenever the app files change, and on demand (Actions tab > Publish > Run workflow).
 name: Publish
 
 on:
   schedule:
-    - cron: "17 11 * * *"   # 11:17 UTC = 3:17 AM Pacific (4:17 AM during daylight time)
+    - cron: "17 0,6,12,18 * * *"   # every 6 hours: 10:17 AM, 4:17 PM, 10:17 PM, 4:17 AM Pacific standard time (an hour later in daylight time)
   push:
     branches: [main]
   workflow_dispatch:
