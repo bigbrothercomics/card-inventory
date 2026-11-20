@@ -109,3 +109,33 @@ button.addcart{width:100%;font-weight:600;margin-top:2px}
 h1 small{font-weight:500;color:var(--muted);font-size:13px;margin-left:6px}
 a.back{color:var(--accent);font-size:14px}
 .qty.cartstep{gap:8px}
+/* email orders (back office) */
+.eform{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end;margin-bottom:10px}
+.eform label:not(.chk){display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
+.eform label.grow{flex:1;min-width:200px}
+.eform label.chk{padding-bottom:8px}
+#elist{display:block;width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;resize:vertical}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:13px;margin:4px 0 8px}
+.legend .sw{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:5px;border:1px solid rgba(0,0,0,.15)}
+.sw.orange{background:#ffd9a8}.sw.red{background:#f9c9c9}
+.etabwrap{overflow-x:auto}
+.etab td{vertical-align:middle}
+.etab tr.orange td{background:#ffe9cc}
+.etab tr.red td{background:#fbdcdc}
+.etab .ename{font-weight:600}
+.etab input.eq{width:44px;text-align:center}
+.etab input.ep{width:64px}
+.etab input.en{width:180px}
+.etab select{font:inherit;padding:5px 6px;border:1px solid var(--line);border-radius:7px;max-width:340px;background:#fff}
+.etab .flag{font-size:12px;font-weight:600}
+.etab tr.orange .flag{color:#a85300}
+.etab tr.red .flag{color:var(--bad)}
+.etab .tot{text-align:right;white-space:nowrap}
+.etab .erm{border:none;background:none;color:var(--muted);font-size:18px;padding:0 4px}
+.efoot{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:flex-end;margin:12px 0 30px}
+.efoot .big{font-size:22px;font-weight:750}
+.modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:16px}
+.modal[hidden]{display:none}
+.modal .box{background:var(--panel);border-radius:12px;padding:18px 20px;max-width:420px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.3)}
+.modal .box h2{margin:0 0 6px;font-size:20px}
+.modal .box .row{justify-content:flex-end;margin-top:14px}

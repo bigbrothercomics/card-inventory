@@ -95,6 +95,8 @@ function applyChanges(list) {
   if (!touched.size) return;
   touched.forEach(refreshTile);
   if (MODE === 'admin' && currentTab() === 'stock') updateStockCount();
+  // Email orders follow live stock, but not while someone is typing in the table.
+  if (MODE === 'admin' && currentTab() === 'email' && !(document.activeElement || document.body).closest('#etable')) renderEmail();
   if (MODE === 'sell') {
     // A card someone else just put in stock isn't on screen yet; redraw the list so it shows up.
     const missing = [...touched].some(k => qtyOf(k) > 0 && !document.querySelector(`#grid .tile[data-key="${CSS.escape(k)}"]`));
@@ -264,7 +266,7 @@ function onTileClick(e) {
 }
 
 /* ---------- tabs ---------- */
-const VIEWS = { sell: ['sell', 'sales'], admin: ['add', 'stock', 'missing', 'history'] }[MODE];
+const VIEWS = { sell: ['sell', 'sales'], admin: ['add', 'stock', 'missing', 'email', 'history'] }[MODE];
 function setTab(tab) {
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   VIEWS.forEach(t => { $('#v-' + t).hidden = t !== tab; });
@@ -280,6 +282,7 @@ function renderAll() {
   else if (t === 'add') renderSearch();
   else if (t === 'stock') renderStock();
   else if (t === 'missing') renderMissing();
+  else if (t === 'email') renderEmail();
 }
 
 /* =====================================================================
@@ -624,6 +627,279 @@ async function onMissingClick(e) {
   } catch (x) { b.disabled = false; toast('Not removed: ' + x.message); }
 }
 
+/* ---------- email orders ---------- */
+// Paste a customer's want list; each line is matched to what's in stock, priced at CK NM retail, and
+// checked against their budgets. Ticked lines are removed from inventory with one "sell", and the
+// customer gets a PDF named after them.
+const E_ORANGE = 'orange', E_RED = 'red';
+const parseMoney = v => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
+function emailBlank() { return { cust: '', card: '', total: '', foil: false, ckok: false, notes: '', text: '', lines: [] }; }
+function saveEmail() { ls.set('emaildraft', JSON.stringify(S.email)); }
+
+// "4 Lightning Bolt", "4x Lightning Bolt", "Lightning Bolt x4", "1 Lightning Bolt (M11) 146", "- Lightning Bolt"
+function parseWantList(text) {
+  const out = [];
+  for (let raw of String(text || '').split(/\r?\n/)) {
+    let s = raw.replace(/^\s*(?:[-*•·>]+|SB:)\s*/i, '').replace(/\s+\*[FE]\*\s*$/i, '').trim();
+    if (!s || !/[a-z]/i.test(s) || /:\s*$/.test(s)) continue;                    // blank lines, headings like "Creatures:"
+    if (/^(deck|sideboard|commander|maybeboard|companion|total|thanks|thank you)\b/i.test(s) && !/\d/.test(s)) continue;
+    let qty = 1, m;
+    if ((m = s.match(/^(\d{1,3})\s*[x×]?\s+(.+)$/i))) { qty = +m[1]; s = m[2]; }
+    else if ((m = s.match(/^(.+?)\s*[x×]\s*(\d{1,3})$/i)) || (m = s.match(/^(.+?)\s*\((?:x\s*)?(\d{1,3})\)$/i))) { s = m[1]; qty = +m[2]; }
+    let set = '', cn = '';
+    if ((m = s.match(/^(.+?)\s*[([]\s*([a-z0-9]{2,6})\s*[)\]]\s*([0-9a-z★-]+)?\s*$/i))) { s = m[1]; set = m[2].toLowerCase(); cn = m[3] || ''; }
+    s = s.replace(/\s+/g, ' ').trim();
+    if (s && qty > 0) out.push({ qty, name: s, set, cn, found: null, pick: '', checked: false, price: null });
+  }
+  return out;
+}
+
+// In-stock printings by folded card name (and by the front face of two-faced cards).
+function stockIndex() {
+  const idx = new Map();
+  const add = (k, e) => { if (!k) return; let a = idx.get(k); if (!a) idx.set(k, a = []); if (!a.includes(e)) a.push(e); };
+  for (const e of S.inv.values()) { if (e.qty <= 0 || !e.name) continue; add(nameOf(e), e); if (e.name.includes(' // ')) add(norm(e.name.split(' // ')[0]), e); }
+  return idx;
+}
+
+// Every in-stock version for a line, cheapest first. Copies already used by earlier lines don't count twice.
+function optionsFor(line, idx, used) {
+  const list = (idx.get(norm(line.name)) || []).filter(e => S.email.foil || e.key.endsWith('|nonfoil'));
+  return list.map(e => {
+    const t = { key: e.key, meta: metaFromStock(e), finish: e.key.split('|')[1] };
+    return { ...t, have: Math.max(0, e.qty - (used.get(e.key) || 0)), price: priceFor(t, 'nm') };
+  }).filter(o => o.have > 0).sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9) || b.have - a.have);
+}
+
+// The cheapest version with enough copies for the whole request; if none has enough, the one with the most copies.
+// A set named in the list, e.g. "(M11)", wins when we have it.
+function pickDefault(opts, qty, set) {
+  if (!opts.length) return null;
+  const pool = set && opts.some(o => o.meta.set === set) ? opts.filter(o => o.meta.set === set) : opts;
+  return pool.find(o => o.have >= qty) || pool.slice().sort((a, b) => b.have - a.have || (a.price ?? 1e9) - (b.price ?? 1e9))[0];
+}
+
+// Works out every line: chosen version, price, colour, and whether it counts toward the order (top to bottom).
+function computeEmail() {
+  const em = S.email, idx = stockIndex(), used = new Map();
+  const cardB = parseMoney(em.card), totalB = parseMoney(em.total);
+  let total = 0, cards = 0;
+  const rows = em.lines.map((l, i) => {
+    const opts = optionsFor(l, idx, used);
+    const o = opts.find(x => x.key === l.pick) || pickDefault(opts, l.qty, l.set);
+    const r = { i, l, opts, o, have: 0, price: null, lineTotal: 0, cls: '', flag: '', counts: false };
+    if (!o) {
+      r.cls = E_RED;
+      r.flag = l.found === false ? 'Not found on Scryfall. Check the spelling.' : (idx.get(norm(l.name)) || []).length ? 'Only foil in stock (Foils OK is off)' : 'Out of stock';
+      return r;
+    }
+    r.have = Math.min(l.qty, o.have);
+    used.set(o.key, (used.get(o.key) || 0) + r.have);
+    r.price = l.price != null ? l.price : o.price;
+    const short = r.have < l.qty ? `Have ${r.have} of ${l.qty}. ` : '';
+    if (r.price != null && cardB != null && r.price > cardB) {
+      r.cls = E_ORANGE;
+      const fits = opts.some(x => x.price != null && x.price <= cardB);
+      r.flag = short + `Over the ${money(cardB)} per-card budget` + (fits ? '. A cheaper version we have fits' : '');
+      return r;
+    }
+    r.lineTotal = (r.price || 0) * r.have;
+    if (!l.checked) { r.flag = short; return r; }
+    if (r.price == null) { r.flag = short + 'No Card Kingdom price. Type one in.'; return r; }
+    if (totalB != null && total + r.lineTotal > totalB + 1e-9) { r.cls = E_ORANGE; r.flag = short + `Would go over the ${money(totalB)} overall budget`; return r; }
+    total += r.lineTotal; cards += r.have; r.counts = true; r.flag = short;
+    return r;
+  });
+  return { rows, total, cards, cardB, totalB };
+}
+
+function renderEmail() {
+  const em = S.email, box = $('#etable'), foot = $('#efoot');
+  if (!em.lines.length) { box.innerHTML = ''; foot.innerHTML = ''; return; }
+  const c = computeEmail();
+  const verLabel = o => `${o.meta.setName} #${o.meta.cn}${finLabel(o.finish)} · ${o.have} in stock · ${o.price != null ? money(o.price) : 'no CK price'}`;
+  box.innerHTML = `<table class="etab"><thead><tr><th title="Tick to include">✓</th><th>Qty</th><th>Card</th><th>Version</th><th title="Box locations come later">Box</th><th>Price ea</th><th class="tot">Total</th><th>Notes</th><th></th></tr></thead><tbody>` +
+    c.rows.map(r => {
+      const l = r.l, o = r.o;
+      const name = l.found === false ? `<input type="text" class="en" data-e="name" value="${esc(l.name)}" aria-label="Card name">` : `<span class="ename">${esc(l.name)}</span>`;
+      const ver = o ? `<select data-e="pick" aria-label="Version">${r.opts.map(x => `<option value="${esc(x.key)}"${x.key === o.key ? ' selected' : ''}>${esc(verLabel(x))}</option>`).join('')}</select>` : '';
+      const price = !o ? '' : o.price == null || l.price != null
+        ? `$<input type="text" class="ep" data-e="price" inputmode="decimal" value="${r.price != null ? r.price.toFixed(2) : ''}" placeholder="price"> ${o.price == null ? `<a href="${esc(tcgUrl(o.meta))}" target="_blank" rel="noopener" class="hint">TCG ↗</a>` : ''}`
+        : money(r.price);
+      return `<tr class="${r.cls}" data-i="${r.i}">
+        <td>${o ? `<input type="checkbox" data-e="chk" ${l.checked ? 'checked' : ''} aria-label="Include">` : ''}</td>
+        <td><input type="text" class="eq" data-e="qty" inputmode="numeric" value="${l.qty}" aria-label="Quantity"></td>
+        <td>${name}</td><td>${ver}</td><td class="muted">—</td><td>${price}</td>
+        <td class="tot">${r.counts ? money(r.lineTotal) : ''}</td>
+        <td class="flag">${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
+        <td><button class="erm" data-e="rm" title="Remove this line" aria-label="Remove line">×</button></td></tr>`;
+    }).join('') + '</tbody></table>';
+  const left = c.totalB != null ? ` <span class="muted">· ${money(Math.max(0, c.totalB - c.total))} of ${money(c.totalB)} budget left</span>` : '';
+  foot.innerHTML = `<button data-e="tickall">Tick all in stock</button><span>${c.cards} card${c.cards === 1 ? '' : 's'} · <span class="big">${money(c.total)}</span>${left}</span>
+    <button class="primary" data-e="complete" ${c.cards && !S.emailBusy ? '' : 'disabled'}>${S.emailBusy ? 'Saving order…' : 'Complete order'}</button>`;
+  const red = c.rows.filter(r => r.cls === E_RED).length;
+  $('#enote').textContent = `${em.lines.length} line${em.lines.length === 1 ? '' : 's'}, ${red} out of stock.`;
+}
+
+function emailFormIn() {
+  const em = S.email;
+  em.cust = $('#ecust').value.trim(); em.card = $('#ecard').value; em.total = $('#etotal').value;
+  em.foil = $('#efoil').checked; em.ckok = $('#eckok').checked; em.notes = $('#enotes').value; em.text = $('#elist').value;
+}
+function emailFormOut() {
+  const em = S.email;
+  $('#ecust').value = em.cust; $('#ecard').value = em.card; $('#etotal').value = em.total;
+  $('#efoil').checked = em.foil; $('#eckok').checked = em.ckok; $('#enotes').value = em.notes; $('#elist').value = em.text;
+  $('#elastpdf').hidden = !ls.get('emaillast');
+}
+
+// Names not in stock are checked on Scryfall so typos show up (and a fixed typo can still match our stock).
+async function resolveNames(lines) {
+  const idx = stockIndex();
+  const unknown = lines.filter(l => !idx.has(norm(l.name)));
+  lines.forEach(l => { const hit = idx.get(norm(l.name)); if (hit) { l.found = true; l.name = hit[0].name; } });
+  for (let i = 0; i < unknown.length; i += 75) {
+    const chunk = unknown.slice(i, i + 75);
+    await throttle();
+    const r = await fetch('https://api.scryfall.com/cards/collection', { method: 'POST', headers: { 'Content-Type': 'application/json', ...SF_HEADERS }, body: JSON.stringify({ identifiers: chunk.map(l => ({ name: l.name })) }) });
+    if (!r.ok) throw new Error('Scryfall returned ' + r.status);
+    const j = await r.json();
+    const byName = new Map();
+    (j.data || []).forEach(c => { byName.set(norm(c.name), c.name); if (c.name.includes(' // ')) byName.set(norm(c.name.split(' // ')[0]), c.name); });
+    chunk.forEach(l => { const n = byName.get(norm(l.name)); if (n) { l.found = true; l.name = n; } });
+  }
+  for (const l of unknown.filter(x => !x.found).slice(0, 40)) {
+    await throttle();
+    const r = await fetch('https://api.scryfall.com/cards/named?fuzzy=' + encodeURIComponent(l.name), { headers: SF_HEADERS });
+    if (r.ok) { const c = await r.json(); l.found = true; l.name = c.name; } else l.found = false;
+  }
+}
+
+async function checkEmailList() {
+  emailFormIn();
+  const lines = parseWantList(S.email.text);
+  if (!lines.length) { toast('Paste the card list first'); $('#elist').focus(); return; }
+  if (!S.loaded) { toast('The inventory has not loaded yet'); return; }
+  $('#echeck').disabled = true; $('#enote').textContent = 'Checking the list…';
+  try { await resolveNames(lines); }
+  catch (e) { toast('Could not check names on Scryfall (' + e.message + '). In-stock cards still work.'); }
+  finally { $('#echeck').disabled = false; }
+  S.email.lines = lines; saveEmail(); renderEmail();
+}
+
+function onEmailEvent(e) {
+  const el = e.target.closest('[data-e]'); if (!el) return;
+  const act = el.dataset.e, tr = el.closest('tr'), l = tr ? S.email.lines[+tr.dataset.i] : null;
+  if (e.type === 'click' && !['rm', 'more', 'tickall', 'complete'].includes(act)) return;
+  if (e.type === 'click') e.preventDefault();
+  if (act === 'complete') return completeEmailOrder();
+  if (act === 'tickall') { const c = computeEmail(); c.rows.forEach(r => { if (r.o) r.l.checked = true; }); }
+  else if (act === 'rm') S.email.lines.splice(+tr.dataset.i, 1);
+  else if (act === 'more') { const r = computeEmail().rows[+tr.dataset.i]; S.email.lines.splice(+tr.dataset.i + 1, 0, { ...l, qty: l.qty - r.have, pick: '', price: null }); l.qty = r.have; }
+  else if (act === 'chk') l.checked = el.checked;
+  else if (act === 'pick') { l.pick = el.value; l.price = null; }
+  else if (act === 'qty') { const q = parseInt(el.value, 10); if (q > 0) l.qty = Math.min(999, q); }
+  else if (act === 'price') l.price = parseMoney(el.value);
+  else if (act === 'name') { l.name = el.value.trim(); l.found = null; resolveNames([l]).catch(() => {}).then(() => { saveEmail(); renderEmail(); }); return; }
+  saveEmail(); renderEmail();
+}
+
+async function completeEmailOrder() {
+  if (S.emailBusy) return;
+  emailFormIn();
+  const em = S.email;
+  if (!em.cust) { toast('Type the customer name first. It names their PDF.'); $('#ecust').focus(); return; }
+  if (!S.who) { toast('Enter your name (top right) first so the order is logged'); $('#who').focus(); return; }
+  const c = computeEmail();
+  const take = c.rows.filter(r => r.counts);
+  if (!take.length) { toast('Tick at least one card that is in stock'); return; }
+  const noPrice = c.rows.find(r => r.l.checked && r.o && r.price == null && r.cls !== E_ORANGE);
+  if (noPrice) { toast(`Type a price for ${noPrice.l.name} or untick it`); return; }
+  if (!confirm(`Remove ${c.cards} card${c.cards === 1 ? '' : 's'} (${money(c.total)}) from inventory for ${em.cust}?`)) return;
+  S.emailBusy = true; renderEmail();
+  let j;
+  try {
+    j = await api('sell', { who: S.who, customer: em.cust, rows: take.map(r => ({ id: r.o.meta.id, finish: r.o.finish, qty: r.have, meta: { name: r.o.meta.name, set: r.o.meta.set, setName: r.o.meta.setName, cn: r.o.meta.cn } })) });
+  } catch (e) {
+    S.emailBusy = false; renderEmail();
+    toast('Order NOT saved: ' + e.message.replace(/\.$/, '') + '. Nothing was removed from inventory.');
+    return;
+  }
+  // What the server actually removed, shared across lines in list order (stock can change while you work).
+  const left = new Map(j.items.map(it => [it.key, it.sold]));
+  for (const it of j.items) { const r = take.find(x => x.o.key === it.key); setLocalQty(it.key, it.qty, { name: r.o.meta.name, set: r.o.meta.set, setName: r.o.meta.setName, cn: r.o.meta.cn }); }
+  const pdfRows = [];
+  for (const r of c.rows) {
+    const v = r.o ? `${r.o.meta.setName} #${r.o.meta.cn}${finLabel(r.o.finish)}` : '';
+    if (r.counts) {
+      const sold = Math.min(r.have, left.get(r.o.key) || 0); left.set(r.o.key, (left.get(r.o.key) || 0) - sold);
+      pdfRows.push(sold ? { qty: sold, asked: r.l.qty, name: r.l.name, ver: v, price: r.price, total: r.price * sold, cls: '' } : { qty: r.l.qty, asked: r.l.qty, name: r.l.name, ver: '', cls: E_RED });
+    } else if (r.cls === E_RED) pdfRows.push({ qty: r.l.qty, asked: r.l.qty, name: r.l.name, ver: '', cls: E_RED });
+    else if (r.cls === E_ORANGE) pdfRows.push({ qty: r.have, asked: r.l.qty, name: r.l.name, ver: v, price: r.price, cls: E_ORANGE });
+  }
+  const done = { order: j.order, n: j.customerN || 1, cust: em.cust, time: new Date().toISOString(), rows: pdfRows, total: pdfRows.reduce((n, x) => n + (x.cls ? 0 : x.total), 0), budget: c.totalB };
+  ls.set('emaillast', JSON.stringify(done));
+  S.email = emailBlank(); saveEmail(); emailFormOut();
+  S.emailBusy = false; renderEmail();
+  const removed = pdfRows.filter(x => !x.cls).reduce((n, x) => n + x.qty, 0);
+  $('#emodal').innerHTML = `<div class="box" role="dialog" aria-label="Order complete"><h2>Order #${esc(done.order)} complete</h2>
+    <p>${esc(done.cust)}: <b>${money(done.total)}</b>, ${removed} card${removed === 1 ? '' : 's'} removed from inventory.</p>
+    <div class="row"><button data-m="close">Close</button><button class="primary" data-m="pdf">Download PDF (${esc(pdfName(done))})</button></div></div>`;
+  $('#emodal').hidden = false;
+}
+
+const pdfName = d => (d.cust.replace(/[\\/:*?"<>|]+/g, '').trim() || 'Order') + (d.n > 1 ? d.n : '') + '.pdf';
+function loadScript(src) { return new Promise((ok, bad) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => bad(new Error('Could not load the PDF maker')); document.head.appendChild(s); }); }
+async function logoDataUrl() {
+  const b = await (await fetch('logo.png')).blob();
+  return new Promise(ok => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b); });
+}
+
+// The customer's copy: logo, their name, a colour guide, and every card with what we had.
+async function emailPdf(d) {
+  if (!window.jspdf) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'letter' });
+  const W = 612, M = 40, FILL = { orange: [255, 217, 168], red: [249, 201, 201] };
+  try { doc.addImage(await logoDataUrl(), 'PNG', M, 32, 64, 64); } catch (e) {}
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.text('Big Brother Comics', M + 78, 58);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(12);
+  doc.text(`Card order for ${d.cust}`, M + 78, 78);
+  doc.setFontSize(10); doc.setTextColor(100);
+  doc.text(`Order #${d.order}  ·  ${new Date(d.time).toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' })}`, W - M, 58, { align: 'right' });
+  doc.text('Prices: Card Kingdom Near Mint retail', W - M, 74, { align: 'right' });
+  let y = 116;
+  doc.setTextColor(30);
+  doc.setFillColor(...FILL.orange); doc.rect(M, y - 9, 11, 11, 'F'); doc.text('Orange rows: over budget', M + 16, y);
+  doc.setFillColor(...FILL.red); doc.rect(M + 170, y - 9, 11, 11, 'F'); doc.text('Red rows: out of stock', M + 186, y);
+  y += 24;
+  const cols = [{ t: 'Qty', x: M + 4 }, { t: 'Card', x: M + 54 }, { t: 'Version', x: M + 270 }, { t: 'Price ea', x: W - M - 74, r: true }, { t: 'Total', x: W - M - 4, r: true }];
+  const fit = (s, w) => { s = String(s || ''); if (doc.getTextWidth(s) <= w) return s; while (s && doc.getTextWidth(s + '…') > w) s = s.slice(0, -1); return s + '…'; };
+  const head = () => { doc.setFont('helvetica', 'bold'); cols.forEach(c => doc.text(c.t, c.x, y, c.r ? { align: 'right' } : undefined)); doc.setDrawColor(180); doc.line(M, y + 5, W - M, y + 5); doc.setFont('helvetica', 'normal'); y += 20; };
+  head();
+  for (const r of d.rows) {
+    if (y > 740) { doc.addPage(); y = 50; head(); }
+    if (r.cls) { doc.setFillColor(...FILL[r.cls]); doc.rect(M, y - 12, W - 2 * M, 17, 'F'); }
+    doc.text(r.cls === E_RED ? String(r.asked) : r.qty < r.asked ? `${r.qty} of ${r.asked}` : String(r.qty), cols[0].x, y);
+    doc.text(fit(r.name, 210), cols[1].x, y);
+    doc.text(fit(r.cls === E_RED ? 'Out of stock' : r.ver, 150), cols[2].x, y);
+    if (r.cls !== E_RED && r.price != null) doc.text(money(r.price), cols[3].x, y, { align: 'right' });
+    doc.text(r.cls === E_RED ? '' : r.cls === E_ORANGE ? 'Over budget' : money(r.total), cols[4].x, y, { align: 'right' });
+    y += 17;
+  }
+  if (y > 730) { doc.addPage(); y = 50; }
+  doc.setDrawColor(180); doc.line(M, y - 6, W - M, y - 6);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
+  doc.text(`Total: ${money(d.total)}`, W - M - 4, y + 12, { align: 'right' });
+  if (d.budget != null) { doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.text(`Your budget: ${money(d.budget)}`, W - M - 4, y + 28, { align: 'right' }); }
+  doc.save(pdfName(d));
+}
+
+async function downloadEmailPdf() {
+  let d; try { d = JSON.parse(ls.get('emaillast')); } catch (e) {}
+  if (!d) { toast('No completed email order on this computer yet'); return; }
+  try { await emailPdf(d); } catch (e) { toast('PDF failed: ' + e.message); }
+}
+
 /* ---------- CSV ---------- */
 function parseCSV(text) {
   const rows = []; let row = [], f = '', q = false;
@@ -708,6 +984,23 @@ async function init() {
     $('#mq').addEventListener('keydown', e => { if (e.key === 'Enter') addMissingByName(); });
     $('#mf').addEventListener('input', debounce(renderMissing, 120));
     $('#missgrid').addEventListener('click', onMissingClick);
+    try { S.email = { ...emailBlank(), ...JSON.parse(ls.get('emaildraft') || '{}') }; } catch (e) { S.email = emailBlank(); }
+    emailFormOut();
+    $('#echeck').addEventListener('click', checkEmailList);
+    $('#enew').addEventListener('click', () => {
+      if (S.email.lines.length && !confirm('Clear this email order and start a new one? Nothing is removed from inventory.')) return;
+      S.email = emailBlank(); saveEmail(); emailFormOut(); renderEmail(); $('#enote').textContent = '';
+    });
+    $('#elastpdf').addEventListener('click', downloadEmailPdf);
+    // Budget and foil answers re-check the table straight away; the rest is just saved.
+    ['#ecust', '#ecard', '#etotal', '#efoil', '#eckok', '#enotes', '#elist'].forEach(s => $(s).addEventListener('input', debounce(() => { emailFormIn(); saveEmail(); renderEmail(); }, 250)));
+    $('#efoil').addEventListener('change', () => { emailFormIn(); saveEmail(); renderEmail(); });
+    ['#etable', '#efoot'].forEach(s => { $(s).addEventListener('click', onEmailEvent); $(s).addEventListener('change', onEmailEvent); });
+    $('#emodal').addEventListener('click', e => {
+      const b = e.target.closest('[data-m]');
+      if (b && b.dataset.m === 'pdf') downloadEmailPdf();
+      if ((b && b.dataset.m === 'close') || e.target.id === 'emodal') $('#emodal').hidden = true;
+    });
     $('#export').addEventListener('click', exportCSV);
     $('#importfile').addEventListener('change', async e => {
       const f = e.target.files[0]; if (!f) return;
