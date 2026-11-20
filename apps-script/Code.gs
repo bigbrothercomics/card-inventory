@@ -17,6 +17,9 @@ var LOG = 'Log';
 var INV_HEAD = ['key', 'scryfall_id', 'finish', 'qty', 'name', 'set', 'set_name', 'collector_number', 'updated', 'updated_by'];
 var LOG_HEAD = ['seq', 'time', 'who', 'action', 'key', 'name', 'set', 'set_name', 'collector_number', 'finish', 'change', 'qty_after'];
 var FINISHES = { nonfoil: 1, foil: 1, etched: 1 };
+// Cards the store knows it is missing: one row per card (Scryfall oracle id), shown as its original printing.
+var MISS = 'Missing';
+var MISS_HEAD = ['oracle_id', 'name', 'scryfall_id', 'set', 'set_name', 'collector_number', 'added', 'added_by'];
 
 function doGet() {
   return json_({ ok: true, service: 'card-inventory', time: new Date().toISOString() });
@@ -163,7 +166,69 @@ var ACTIONS = {
       return { seq: r[0], time: r[1] instanceof Date ? r[1].toISOString() : String(r[1]), who: r[2], action: r[3], key: r[4], name: r[5], set: r[6], setName: r[7], cn: r[8], finish: r[9], change: r[10], qty: r[11] };
     }) };
   },
+
+  // Stock counts for a few printings (the Scryfall extension asks for the cards on screen).
+  lookup: function (b) {
+    var want = {}, out = {};
+    (b.keys || []).slice(0, 3000).forEach(function (k) { k = String(k).toLowerCase(); want[k] = 1; out[k] = 0; });
+    var inv = sheets_().inv, n = inv.getLastRow() - 1;
+    if (n > 0) {
+      var v = inv.getRange(2, 1, n, 4).getValues();
+      for (var i = 0; i < v.length; i++) if (want[v[i][0]]) out[v[i][0]] = Number(v[i][3]) || 0;
+    }
+    return { ok: true, qty: out };
+  },
+
+  // The Missing Cards list.
+  missing: function () {
+    var sh = missTab_(), n = sh.getLastRow() - 1;
+    var rows = n > 0 ? sh.getRange(2, 1, n, MISS_HEAD.length).getValues() : [];
+    return { ok: true, cards: rows.filter(function (r) { return r[0]; }).map(function (r) {
+      return { oracle: String(r[0]), name: String(r[1]), id: String(r[2]), set: String(r[3]), setName: String(r[4]), cn: String(r[5]), added: r[6] instanceof Date ? r[6].toISOString() : String(r[6]), who: String(r[7]) };
+    }) };
+  },
+
+  // Add a card to Missing Cards. A card already on the list is left as it is (no duplicates).
+  missingAdd: function (b) {
+    var who = clean_(b.who, 60);
+    if (!who) throw new Error('Enter your name first');
+    var oracle = String(b.oracle || '').trim().toLowerCase();
+    var id = String(b.id || '').trim().toLowerCase();
+    if (!/^[0-9a-f-]{36}$/.test(oracle) || !/^[0-9a-f-]{36}$/.test(id)) throw new Error('Bad card id');
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(25000)) throw new Error('The inventory is busy, try again');
+    try {
+      var sh = missTab_();
+      if (findRow_(sh, oracle)) return { ok: true, already: true };
+      sh.appendRow([oracle, clean_(b.name, 200), id, clean_(b.set, 12), clean_(b.setName, 120), clean_(b.cn, 20), new Date(), who]);
+      return { ok: true, added: true };
+    } finally { lock.releaseLock(); }
+  },
+
+  // Take a card off Missing Cards.
+  missingRemove: function (b) {
+    var oracle = String(b.oracle || '').trim().toLowerCase();
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(25000)) throw new Error('The inventory is busy, try again');
+    try {
+      var sh = missTab_(), row = findRow_(sh, oracle);
+      if (row) sh.deleteRow(row);
+      return { ok: true, removed: !!row };
+    } finally { lock.releaseLock(); }
+  },
 };
+
+function missTab_() {
+  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(MISS);
+  if (!sh) {
+    sh = ss.insertSheet(MISS);
+    sh.getRange(1, 1, 1, MISS_HEAD.length).setValues([MISS_HEAD]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('A:A').setNumberFormat('@');
+    sh.getRange('F:F').setNumberFormat('@');
+  }
+  return sh;
+}
 
 /* ---------- helpers ---------- */
 
