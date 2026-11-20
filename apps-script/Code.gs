@@ -7,6 +7,8 @@
  * Tabs (created automatically on first use):
  *   Inventory  one row per printing + finish, with the live quantity
  *   Log        every change: who, when, what, and the quantity afterwards
+ *   Missing    cards the store is sure it's missing
+ *   Orders     every completed order with prices (for finding and reversing orders)
  *
  * Optional: to require a shared store code later, set a Script Property named
  * ACCESS_CODE (Project Settings > Script Properties). The app will then ask for it.
@@ -20,6 +22,10 @@ var FINISHES = { nonfoil: 1, foil: 1, etched: 1 };
 // Cards the store knows it is missing: one row per card (Scryfall oracle id), shown as its original printing.
 var MISS = 'Missing';
 var MISS_HEAD = ['oracle_id', 'name', 'scryfall_id', 'set', 'set_name', 'collector_number', 'added', 'added_by'];
+// Every completed order with its prices, so the back office can find and reverse it.
+// items = JSON [[key, sold, price, name, set, set_name, cn], ...]
+var ORD = 'Orders';
+var ORD_HEAD = ['order', 'time', 'who', 'customer', 'total', 'cards', 'items', 'reversed', 'reversed_by'];
 
 function doGet() {
   return json_({ ok: true, service: 'card-inventory', time: new Date().toISOString() });
@@ -125,10 +131,12 @@ var ACTIONS = {
   sell: function (b) {
     var who = clean_(b.who, 60);
     if (!who) throw new Error('Enter your name first');
-    var merged = {}, list = [];
+    var merged = {}, list = [], lines = [];
     (b.rows || []).slice(0, 500).forEach(function (r) {
       var it = item_(r), q = Math.max(0, Math.round(Number(r.qty) || 0));
       if (!q) return;
+      var p = Number(r.price);
+      lines.push({ key: it.key, qty: q, price: isFinite(p) && p >= 0 && r.price !== null && r.price !== '' ? Math.round(p * 100) / 100 : null, it: it });
       if (merged[it.key]) merged[it.key].qty += q; else { it.qty = q; merged[it.key] = it; list.push(it); }
     });
     if (!list.length) throw new Error('The order is empty');
@@ -161,7 +169,70 @@ var ACTIONS = {
         logs.push([++seq, now, who, action, it.key, it.name, it.set, it.setName, it.cn, it.finish, -take, cur - take]);
       });
       if (logs.length) s.log.getRange(s.log.getLastRow() + 1, 1, logs.length, LOG_HEAD.length).setValues(logs);
+      // Record the order with what was actually removed, line by line in order, at each line's price.
+      var left = {}, rec = [], total = 0, cards = 0;
+      items.forEach(function (x) { left[x.key] = x.sold; });
+      lines.forEach(function (l) {
+        var n = Math.min(l.qty, left[l.key] || 0); if (!n) return;
+        left[l.key] -= n; cards += n; total += (l.price || 0) * n;
+        var it = merged[l.key];
+        rec.push([l.key, n, l.price, it.name, it.set, it.setName, it.cn]);
+      });
+      if (rec.length) ordTab_().appendRow([String(order), now, who, customer, Math.round(total * 100) / 100, cards, itemsJson_(rec), '', '']);
       return { ok: true, seq: seq, order: order, items: items, customerN: customerN };
+    });
+  },
+
+  // Past orders, newest first, filtered by time (ISO from/to), text (customer, staff name or order number)
+  // and total (min/max). Orders from before prices were recorded are rebuilt from the Log, with no total.
+  orders: function (b) {
+    var all = allOrders_(sheets_());
+    var from = b.from ? new Date(b.from).getTime() : -Infinity, to = b.to ? new Date(b.to).getTime() : Infinity;
+    var q = String(b.q || '').trim().toLowerCase().replace(/^#/, '');
+    var min = b.min === '' || b.min == null ? null : Number(b.min), max = b.max === '' || b.max == null ? null : Number(b.max);
+    var out = all.filter(function (o) {
+      var t = new Date(o.time).getTime();
+      if (t < from || t > to) return false;
+      if (q && String(o.order).toLowerCase() !== q && o.customer.toLowerCase().indexOf(q) < 0 && o.who.toLowerCase().indexOf(q) < 0) return false;
+      if ((min != null || max != null) && o.total == null) return false;
+      if (min != null && o.total < min) return false;
+      if (max != null && o.total > max) return false;
+      return true;
+    });
+    out.sort(function (a, c) { return new Date(c.time) - new Date(a.time); });
+    var limit = Math.min(1000, Math.max(1, Number(b.limit) || 300));
+    return { ok: true, count: out.length, orders: out.slice(0, limit) };
+  },
+
+  // Undo an order: put every card in it back into stock (logged "Reversed #N") and mark it reversed.
+  reverse: function (b) {
+    var who = clean_(b.who, 60);
+    if (!who) throw new Error('Enter your name first');
+    var want = String(b.order == null ? '' : b.order).trim().replace(/^#/, '');
+    if (!want) throw new Error('Which order?');
+    return withLock_(function (s) {
+      var o = null, all = allOrders_(s);
+      for (var i = 0; i < all.length; i++) if (String(all[i].order) === want) { o = all[i]; break; }
+      if (!o) throw new Error('Order #' + want + ' was not found');
+      if (o.reversed) throw new Error('Order #' + want + ' was already reversed');
+      var now = new Date(), seq = lastSeq_(s.log), logs = [], back = [];
+      o.items.forEach(function (x) {
+        var key = x[0], n = Number(x[1]) || 0; if (!n) return;
+        var parts = key.split('|'), row = findRow_(s.inv, key);
+        var old = row ? s.inv.getRange(row, 1, 1, INV_HEAD.length).getValues()[0] : null;
+        var it = { key: key, id: parts[0], finish: parts[1], name: x[3] || '', set: x[4] || '', setName: x[5] || '', cn: x[6] || '' };
+        keep_(it, old);
+        var cur = old ? Number(old[3]) || 0 : 0, qty = cur + n;
+        var vals = [key, it.id, it.finish, qty, it.name, it.set, it.setName, it.cn, now, who];
+        if (row) s.inv.getRange(row, 1, 1, vals.length).setValues([vals]); else s.inv.appendRow(vals);
+        logs.push([++seq, now, who, 'Reversed #' + want, key, it.name, it.set, it.setName, it.cn, it.finish, n, qty]);
+        back.push({ key: key, qty: qty, name: it.name, set: it.set, setName: it.setName, cn: it.cn });
+      });
+      if (logs.length) s.log.getRange(s.log.getLastRow() + 1, 1, logs.length, LOG_HEAD.length).setValues(logs);
+      var ot = ordTab_();
+      if (o.row) ot.getRange(o.row, 8, 1, 2).setValues([[now, who]]);
+      else ot.appendRow([String(o.order), o.time ? new Date(o.time) : now, o.who, o.customer, '', o.cards, itemsJson_(o.items), now, who]);
+      return { ok: true, seq: seq, order: o.order, items: back };
     });
   },
 
@@ -239,6 +310,58 @@ function missTab_() {
     sh.getRange('F:F').setNumberFormat('@');
   }
   return sh;
+}
+
+function ordTab_() {
+  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(ORD);
+  if (!sh) {
+    sh = ss.insertSheet(ORD);
+    sh.getRange(1, 1, 1, ORD_HEAD.length).setValues([ORD_HEAD]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('A:A').setNumberFormat('@');
+    sh.getRange('G:G').setNumberFormat('@');
+  }
+  return sh;
+}
+
+// A cell holds at most 50,000 characters; very large orders drop card names (the key is enough to restore stock).
+function itemsJson_(rec) {
+  var j = JSON.stringify(rec);
+  return j.length < 49000 ? j : JSON.stringify(rec.map(function (x) { return [x[0], x[1], x[2]]; }));
+}
+
+// Orders from the Orders tab, plus older ones rebuilt from the Log ("Sold #N" rows; "Reversed #N" marks them undone).
+function allOrders_(s) {
+  var ot = ordTab_(), n = ot.getLastRow() - 1, out = [], seen = {};
+  var iso = function (d) { return d instanceof Date ? d.toISOString() : String(d || ''); };
+  var rows = n > 0 ? ot.getRange(2, 1, n, ORD_HEAD.length).getValues() : [];
+  rows.forEach(function (r, i) {
+    if (r[0] === '' || r[0] == null) return;
+    var items = []; try { items = JSON.parse(r[6] || '[]'); } catch (e) {}
+    var o = { order: String(r[0]), time: iso(r[1]), who: String(r[2]), customer: String(r[3]), total: r[4] === '' ? null : Number(r[4]), cards: Number(r[5]) || 0, items: items, reversed: r[7] ? iso(r[7]) : '', reversedBy: String(r[8] || ''), row: i + 2 };
+    seen[o.order] = o; out.push(o);
+  });
+  var ln = lastSeq_(s.log);
+  if (ln > 0) {
+    var v = s.log.getRange(2, 1, ln, LOG_HEAD.length).getValues(), old = {}, undone = {};
+    v.forEach(function (r) {
+      var a = String(r[3]), m = a.match(/^Sold #(\S+)(?: \(Email: (.*)\))?$/);
+      if (m) {
+        if (seen[m[1]]) return;
+        var o = old[m[1]] || (old[m[1]] = { order: m[1], time: iso(r[1]), who: String(r[2]), customer: m[2] || '', total: null, cards: 0, items: [], reversed: '', reversedBy: '', row: 0 });
+        var k = -Number(r[10]) || 0; o.cards += k;
+        o.items.push([String(r[4]), k, null, String(r[5]), String(r[6]), String(r[7]), String(r[8])]);
+        return;
+      }
+      m = a.match(/^Reversed #(\S+)$/);
+      if (m && !undone[m[1]]) undone[m[1]] = { time: iso(r[1]), who: String(r[2]) };
+    });
+    Object.keys(old).forEach(function (k) {
+      if (undone[k]) { old[k].reversed = undone[k].time; old[k].reversedBy = undone[k].who; }
+      out.push(old[k]);
+    });
+  }
+  return out;
 }
 
 /* ---------- helpers ---------- */
