@@ -6,7 +6,7 @@
 <title>Back Office · All Seeing Inventory</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="logo.png">
-<link rel="stylesheet" href="app.css?v=9">
+<link rel="stylesheet" href="app.css?v=10">
 </head>
 <body data-mode="admin">
 <header>
@@ -67,10 +67,9 @@
       <label>Per-card budget $<input type="text" id="ecard" inputmode="decimal" placeholder="none" size="7"></label>
       <label>Overall budget $<input type="text" id="etotal" inputmode="decimal" placeholder="none" size="7"></label>
       <label class="chk"><input type="checkbox" id="efoil"> Foils OK</label>
-      <label class="chk"><input type="checkbox" id="eckok"> OK with Card Kingdom pricing</label>
       <label class="grow">Notes<input type="text" id="enotes" placeholder="Anything else from their checklist"></label>
     </div>
-    <textarea id="elist" rows="6" placeholder="Paste the card list from the email, one card per line. 4 Lightning Bolt, 4x Lightning Bolt, Lightning Bolt x4 and 1 Lightning Bolt (M11) all work."></textarea>
+    <textarea id="elist" rows="6" placeholder="Paste the card list from the email, one card per line (4 Lightning Bolt, 4x Lightning Bolt, Lightning Bolt x4 all work). Order details can go anywhere in the list and fill in the boxes above: name: Jane Doe · budget: $50 · per card budget: $5 · no foils"></textarea>
     <div class="row" style="margin:8px 0">
       <button id="echeck" class="primary">Check list</button>
       <button id="enew" title="Clear this order and start a new one">New order</button>
@@ -91,6 +90,6 @@
 <div id="toast"></div>
 
 <script src="config.js"></script>
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

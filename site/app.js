@@ -633,8 +633,37 @@ async function onMissingClick(e) {
 // customer gets a PDF named after them.
 const E_ORANGE = 'orange', E_RED = 'red';
 const parseMoney = v => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
-function emailBlank() { return { cust: '', card: '', total: '', foil: false, ckok: false, notes: '', text: '', lines: [] }; }
+function emailBlank() { return { cust: '', card: '', total: '', foil: false, notes: '', text: '', lines: [] }; }
 function saveEmail() { ls.set('emaildraft', JSON.stringify(S.email)); }
+
+// Order details typed among the cards, in any order and any reasonable wording:
+//   "name: Jane" · "customer - Jane" · "budget: $10" · "$10 total" · "per card budget: $2" · "$2 each" · "max $2/card"
+//   "no foils" · "foils: yes" · "foils ok" · "ck pricing: yes" · "notes: ships Friday"
+// Returns the details found and the remaining lines (the card list).
+function extractOrderInfo(text) {
+  const info = {}, rest = [];
+  const YES = /\b(yes|y|ok|okay|fine|sure|allowed|include|including|incl|true|good|accept|accepted|please)\b/;
+  const NO = /\b(no|n|not|none|without|exclude|excluding|false|nope|dont|don't|never)\b/;
+  const amount = s => { const m = s.match(/\$\s*(\d+(?:\.\d{1,2})?)/) || s.match(/(\d+(?:\.\d{1,2})?)\s*(?:\$|dollars?|usd|bucks)/) || s.match(/(?:^|[\s:=])(\d+(?:\.\d{1,2})?)\s*$/) || s.match(/[:=]\s*(\d+(?:\.\d{1,2})?)/); return m ? m[1] : null; };
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.replace(/^\s*(?:[-*•·>]+)\s*/, '').trim();
+    const s = fold(line).replace(/\s+/g, ' ');
+    // A card line ("2 sol ring") never has a $ amount; leave those alone.
+    const cardish = /^\d{1,3}\s*[x×]?\s+[a-z]/.test(s) && !/\$/.test(s);
+    let m;
+    if (!cardish && (m = line.match(/^\s*(?:customer'?s?\s*name|customer|cust|name|for|buyer|client)\s*[:=\-–]\s*(.+)$/i))) { info.cust = m[1].trim(); continue; }
+    if (!cardish && (m = line.match(/^\s*notes?\s*[:=\-–]\s*(.+)$/i))) { info.notes = m[1].trim(); continue; }
+    if (!cardish && /\bfoils?\b/.test(s) && s.split(' ').length <= 6) { info.foil = !NO.test(s) && (YES.test(s) || !/[:=]/.test(s)); continue; }
+    if (!cardish && /\b(ck|card ?kingdom)\b/.test(s) && s.split(' ').length <= 8) continue;   // "CK pricing: yes" lines: not a card, nothing to fill in
+    if (!cardish && /\b(budget|total|overall|max|maximum|limit|spend|spending|cap|up to|per|each|apiece)\b|\$|\bdollars?\b/.test(s) && amount(s) != null) {
+      const per = /\b(per|each|ea|a card|single|singles|individual|apiece)\b|\/\s*(card|ea|each)\b|\bcard budget\b/.test(s);
+      info[per ? 'card' : 'total'] = amount(s);
+      continue;
+    }
+    rest.push(raw);
+  }
+  return { info, rest: rest.join('\n') };
+}
 
 // "4 Lightning Bolt", "4x Lightning Bolt", "Lightning Bolt x4", "1 Lightning Bolt (M11) 146", "- Lightning Bolt"
 function parseWantList(text) {
@@ -731,7 +760,7 @@ function renderEmail() {
         <td><input type="text" class="eq" data-e="qty" inputmode="numeric" value="${l.qty}" aria-label="Quantity"></td>
         <td>${name}</td><td>${ver}</td><td class="muted">—</td><td>${price}</td>
         <td class="tot">${r.counts ? money(r.lineTotal) : ''}</td>
-        <td class="flag">${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
+        <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
         <td><button class="erm" data-e="rm" title="Remove this line" aria-label="Remove line">×</button></td></tr>`;
     }).join('') + '</tbody></table>';
   const left = c.totalB != null ? ` <span class="muted">· ${money(Math.max(0, c.totalB - c.total))} of ${money(c.totalB)} budget left</span>` : '';
@@ -744,13 +773,61 @@ function renderEmail() {
 function emailFormIn() {
   const em = S.email;
   em.cust = $('#ecust').value.trim(); em.card = $('#ecard').value; em.total = $('#etotal').value;
-  em.foil = $('#efoil').checked; em.ckok = $('#eckok').checked; em.notes = $('#enotes').value; em.text = $('#elist').value;
+  em.foil = $('#efoil').checked; em.notes = $('#enotes').value; em.text = $('#elist').value;
 }
 function emailFormOut() {
   const em = S.email;
   $('#ecust').value = em.cust; $('#ecard').value = em.card; $('#etotal').value = em.total;
-  $('#efoil').checked = em.foil; $('#eckok').checked = em.ckok; $('#enotes').value = em.notes; $('#elist').value = em.text;
+  $('#efoil').checked = em.foil; $('#enotes').value = em.notes; $('#elist').value = em.text;
   $('#elastpdf').hidden = !ls.get('emaillast');
+}
+
+// Closest real card name by spelling, for typos Scryfall's fuzzy search gives up on ("sol rnig" → Sol Ring).
+// Scryfall's list of every card name (~1 MB) is downloaded once per page load.
+let cardNameList = null;
+const spell = s => fold(s).replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim();
+async function closestCardName(typed) {
+  if (!cardNameList) {
+    await throttle();
+    const r = await fetch('https://api.scryfall.com/catalog/card-names', { headers: SF_HEADERS });
+    if (!r.ok) throw new Error('Scryfall returned ' + r.status);
+    cardNameList = [];
+    for (const n of (await r.json()).data) {
+      cardNameList.push({ n, s: spell(n) });
+      if (n.includes(' // ')) cardNameList.push({ n, s: spell(n.split(' // ')[0]) });
+    }
+  }
+  const t = spell(typed);
+  const limit = Math.max(1, Math.min(4, Math.floor(t.length / 4)));   // ~1 slip per 4 letters, at most 4
+  let ties = [], bestD = limit + 1;
+  for (const c of cardNameList) {
+    if (Math.abs(c.s.length - t.length) > bestD) continue;
+    const d = editDistance(t, c.s, bestD + 1);
+    if (d < bestD) { bestD = d; ties = [c]; }
+    else if (d === bestD) ties.push(c);
+  }
+  if (!ties.length) return '';
+  // Equally close names ("lightnig blot": Lightning Bolt or Lightning Blow): prefer one we stock,
+  // then the one using the same letters (swapped letters are the commonest slip).
+  const idx = stockIndex(), letters = s => s.replace(/ /g, '').split('').sort().join('');
+  const lt = letters(t);
+  const score = c => (idx.has(norm(c.n)) ? 0 : 100) + editDistance(lt, letters(c.s), 99);
+  return ties.sort((a, b) => score(a) - score(b))[0].n;
+}
+// Letters added, dropped, changed or swapped; stops early once it's over `max`.
+function editDistance(a, b, max) {
+  let prev2 = null, prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]; let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur.push(v); if (v < rowMin) rowMin = v;
+    }
+    if (rowMin >= max) return max;
+    prev2 = prev; prev = cur;
+  }
+  return prev[b.length];
 }
 
 // Names not in stock are checked on Scryfall so typos show up (and a fixed typo can still match our stock).
@@ -768,16 +845,38 @@ async function resolveNames(lines) {
     (j.data || []).forEach(c => { byName.set(norm(c.name), c.name); if (c.name.includes(' // ')) byName.set(norm(c.name.split(' // ')[0]), c.name); });
     chunk.forEach(l => { const n = byName.get(norm(l.name)); if (n) { l.found = true; l.name = n; } });
   }
-  for (const l of unknown.filter(x => !x.found).slice(0, 40)) {
+  // Misspellings: Scryfall's fuzzy match ("embrase the paradox" → Embrace the Paradox), then its
+  // autocomplete for names it finds ambiguous. The note on the row says what was typed.
+  for (const l of unknown.filter(x => !x.found).slice(0, 120)) {
+    const typed = l.name;
     await throttle();
-    const r = await fetch('https://api.scryfall.com/cards/named?fuzzy=' + encodeURIComponent(l.name), { headers: SF_HEADERS });
-    if (r.ok) { const c = await r.json(); l.found = true; l.name = c.name; } else l.found = false;
+    let r = await fetch('https://api.scryfall.com/cards/named?fuzzy=' + encodeURIComponent(typed), { headers: SF_HEADERS });
+    let name = r.ok ? (await r.json()).name : '';
+    if (!name) name = await closestCardName(typed).catch(() => '');
+    if (!name) {
+      await throttle();
+      r = await fetch('https://api.scryfall.com/cards/autocomplete?q=' + encodeURIComponent(typed), { headers: SF_HEADERS });
+      const j = r.ok ? await r.json() : null;
+      name = (j && j.data && j.data[0]) || '';
+    }
+    if (name) { l.found = true; l.name = name; if (norm(name) !== norm(typed)) l.typed = typed; }
+    else l.found = false;
   }
 }
 
 async function checkEmailList() {
   emailFormIn();
-  const lines = parseWantList(S.email.text);
+  // Order details pasted with the list (name, budgets, foils…) fill in the boxes above; the rest is the card list.
+  const { info, rest } = extractOrderInfo(S.email.text);
+  const filled = [];
+  if (info.cust != null) { $('#ecust').value = info.cust; filled.push('name'); }
+  if (info.total != null) { $('#etotal').value = info.total; filled.push('overall budget'); }
+  if (info.card != null) { $('#ecard').value = info.card; filled.push('per-card budget'); }
+  if (info.foil != null) { $('#efoil').checked = info.foil; filled.push('foils'); }
+  if (info.notes != null) { $('#enotes').value = info.notes; filled.push('notes'); }
+  emailFormIn();
+  if (filled.length) toast('Filled in from the list: ' + filled.join(', '));
+  const lines = parseWantList(rest);
   if (!lines.length) { toast('Paste the card list first'); $('#elist').focus(); return; }
   if (!S.loaded) { toast('The inventory has not loaded yet'); return; }
   $('#echeck').disabled = true; $('#enote').textContent = 'Checking the list…';
@@ -800,7 +899,7 @@ function onEmailEvent(e) {
   else if (act === 'pick') { l.pick = el.value; l.price = null; }
   else if (act === 'qty') { const q = parseInt(el.value, 10); if (q > 0) l.qty = Math.min(999, q); }
   else if (act === 'price') l.price = parseMoney(el.value);
-  else if (act === 'name') { l.name = el.value.trim(); l.found = null; resolveNames([l]).catch(() => {}).then(() => { saveEmail(); renderEmail(); }); return; }
+  else if (act === 'name') { l.name = el.value.trim(); l.found = null; l.typed = ''; resolveNames([l]).catch(() => {}).then(() => { saveEmail(); renderEmail(); }); return; }
   saveEmail(); renderEmail();
 }
 
@@ -993,7 +1092,7 @@ async function init() {
     });
     $('#elastpdf').addEventListener('click', downloadEmailPdf);
     // Budget and foil answers re-check the table straight away; the rest is just saved.
-    ['#ecust', '#ecard', '#etotal', '#efoil', '#eckok', '#enotes', '#elist'].forEach(s => $(s).addEventListener('input', debounce(() => { emailFormIn(); saveEmail(); renderEmail(); }, 250)));
+    ['#ecust', '#ecard', '#etotal', '#efoil', '#enotes', '#elist'].forEach(s => $(s).addEventListener('input', debounce(() => { emailFormIn(); saveEmail(); renderEmail(); }, 250)));
     $('#efoil').addEventListener('change', () => { emailFormIn(); saveEmail(); renderEmail(); });
     ['#etable', '#efoot'].forEach(s => { $(s).addEventListener('click', onEmailEvent); $(s).addEventListener('change', onEmailEvent); });
     $('#emodal').addEventListener('click', e => {
