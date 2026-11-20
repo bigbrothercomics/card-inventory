@@ -1,7 +1,12 @@
 :root{
-  --bg:#f6f5f1; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6a64; --line:#e2e0d8;
-  --accent:#2f5d50; --accent-ink:#ffffff; --warn:#a4540f; --warn-bg:#fdf1e3; --bad:#9b2c2c;
+  /* white and red sampled from the All Seeing logo */
+  --bg:#ffffff; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6a64; --line:#e4e2dc;
+  --accent:#e91d25; --accent-dark:#c8141b; --accent-ink:#ffffff; --accent-soft:#fef1f1;
+  --warn:#a4540f; --warn-bg:#fdf1e3; --bad:#b3141b;
 }
+h1.brand{display:flex;align-items:center;gap:8px}
+h1.brand img{width:30px;height:30px;display:block}
+button.primary:hover:not(:disabled){background:var(--accent-dark);border-color:var(--accent-dark)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px}
@@ -44,7 +49,7 @@ main{padding:14px 16px 60px;max-width:1500px;margin:0 auto}
 .oostag{font-size:12px;color:var(--bad);font-weight:600}
 table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
 th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);font-size:14px}
-th{background:#faf9f5}
+th{background:var(--accent-soft)}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:99px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:20;max-width:90vw}
 #toast.show{opacity:1}
 .status{font-size:13px;color:var(--muted)}
@@ -74,7 +79,7 @@ aside.cart{position:sticky;top:66px;background:var(--panel);border:1px solid var
 .total{display:flex;justify-content:space-between;align-items:baseline;font-size:22px;font-weight:700;margin:10px 0 8px}
 button.sell{width:100%;font-size:17px;padding:12px;font-weight:650}
 button:disabled{opacity:.5;cursor:default}
-.receipt{margin-top:16px;border:2px solid var(--accent);border-radius:10px;padding:10px 12px;background:#f3f8f6}
+.receipt{margin-top:16px;border:2px solid var(--accent);border-radius:10px;padding:10px 12px;background:var(--accent-soft)}
 .receipt .rhead{font-size:13px;color:var(--muted)}
 .receipt .rtotal{font-size:30px;font-weight:750;color:var(--accent);margin:2px 0 6px}
 .receipt ul{margin:0;padding:0 0 0 0;list-style:none;font-size:14px}
