@@ -760,17 +760,14 @@ function computeEmail() {
       if (l.checked) { r.flag += ' · added anyway'; total += r.lineTotal; cards += r.have; r.counts = true; }
       return r;
     }
-    if (!l.checked) { r.flag = short; return r; }
+    // The overall budget fills top to bottom with the ticked lines. A line that doesn't fit in what's left is
+    // orange; ticking it adds it anyway (it stays orange so the customer sees it went over).
+    const over = r.price != null && totalB != null && total + r.lineTotal > totalB + 1e-9;
+    if (over) { r.cls = E_ORANGE; r.flag = short + `Would go over the ${money(totalB)} overall budget`; }
+    if (!l.checked) { if (!over) r.flag = short; return r; }
     if (r.price == null) { r.flag = short + 'No Card Kingdom price. Type one in.'; return r; }
-    // Ticked lines fill the overall budget top to bottom. One that doesn't fit turns orange and is left out,
-    // unless staff press "Add anyway".
-    if (totalB != null && total + r.lineTotal > totalB + 1e-9) {
-      r.cls = E_ORANGE;
-      r.flag = short + `Would go over the ${money(totalB)} overall budget`;
-      if (!l.force) { r.addAnyway = true; return r; }
-      r.flag += ' · added anyway';
-    }
-    total += r.lineTotal; cards += r.have; r.counts = true; if (!r.cls) r.flag = short;
+    if (over) r.flag += ' · added anyway'; else r.flag = short;
+    total += r.lineTotal; cards += r.have; r.counts = true;
     return r;
   });
   return { rows, total, cards, cardB, totalB };
@@ -795,7 +792,7 @@ function renderEmail() {
         <td><input type="text" class="eq" data-e="qty" inputmode="numeric" value="${l.qty}" aria-label="Quantity"></td>
         <td>${name}</td><td>${ver}</td><td class="muted">—</td><td>${price}</td>
         <td class="tot">${r.counts ? money(r.lineTotal) : ''}</td>
-        <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${r.addAnyway ? ` <a href="#" data-e="force" class="hint">Add anyway</a>` : ''}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
+        <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
         <td><button class="erm" data-e="rm" title="Remove this line" aria-label="Remove line">×</button></td></tr>`;
     }).join('') + '</tbody></table>';
   const left = c.totalB != null ? ` <span class="muted">· ${money(Math.max(0, c.totalB - c.total))} of ${money(c.totalB)} budget left</span>` : '';
@@ -946,14 +943,14 @@ async function checkEmailList() {
 function onEmailEvent(e) {
   const el = e.target.closest('[data-e]'); if (!el) return;
   const act = el.dataset.e, tr = el.closest('tr'), l = tr ? S.email.lines[+tr.dataset.i] : null;
-  if (e.type === 'click' && !['rm', 'more', 'tickall', 'complete', 'force'].includes(act)) return;
+  if (e.type === 'click' && !['rm', 'more', 'tickall', 'complete'].includes(act)) return;
   if (e.type === 'click') e.preventDefault();
   if (act === 'complete') return completeEmailOrder();
-  if (act === 'tickall') { const c = computeEmail(); c.rows.forEach(r => { if (r.o && r.cls !== E_ORANGE) r.l.checked = true; }); }   // over-budget cards are only added one by one
+  // Tick all: top to bottom, only cards that still fit the budgets; over-budget cards are ticked one by one.
+  if (act === 'tickall') S.email.lines.forEach((x, i) => { const r = computeEmail().rows[i]; if (r.o && r.cls !== E_ORANGE) x.checked = true; });
   else if (act === 'rm') S.email.lines.splice(+tr.dataset.i, 1);
   else if (act === 'more') { const r = computeEmail().rows[+tr.dataset.i]; S.email.lines.splice(+tr.dataset.i + 1, 0, { ...l, qty: l.qty - r.have, pick: '', price: null }); l.qty = r.have; }
-  else if (act === 'chk') { l.checked = el.checked; if (!l.checked) l.force = false; }
-  else if (act === 'force') { l.checked = true; l.force = true; }
+  else if (act === 'chk') l.checked = el.checked;
   else if (act === 'pick') { l.pick = el.value; l.price = null; l.auto = false; }
   else if (act === 'qty') { const q = parseInt(el.value, 10); if (q > 0) l.qty = Math.min(999, q); }
   else if (act === 'price') l.price = parseMoney(el.value);
