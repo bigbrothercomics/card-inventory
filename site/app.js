@@ -356,7 +356,7 @@ function renderCart() {
     </div>`;
   }
   h += `<div class="total"><span>Total</span><span id="carttotal">${money(cartTotal())}</span></div>`;
-  h += `<button class="primary sell" data-cact="sell" ${S.cart.length && !S.selling ? '' : 'disabled'}>${S.selling ? 'Saving sale…' : 'Complete sale and remove from inventory'}</button>`;
+  h += `<button class="primary sell" data-cact="sell" ${S.cart.length && !S.selling ? '' : 'disabled'}>${S.selling ? 'Saving order…' : 'Complete order'}</button>`;
   // The last sale's receipt stays under the cart until the next customer's first card goes in.
   if (S.sales.length && !S.cart.length && ls.get('showlast') !== '0') h += receiptHTML(S.sales[0], true);
   box.innerHTML = h;
@@ -366,33 +366,30 @@ function receiptHTML(s, isLast) {
   const when = new Date(s.time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const items = s.lines.map(l => `<li><span>${l.sold} × ${esc(l.name)}${finLabel(l.finish)} <span class="muted">${esc(String(l.set || '').toUpperCase())} #${esc(l.cn)} ${CONDLABEL[l.cond]}</span>${l.sold < l.qty ? `<br><span class="short">Only ${l.sold} of ${l.qty} were in stock</span>` : ''}</span><span>${money(l.price * l.sold)}</span></li>`).join('');
   return `<div class="receipt"${isLast ? ' aria-live="polite"' : ''}>
-    <div class="rhead">${isLast ? 'Last sale ' : ''}#${esc(s.order)} · ${esc(when)} · ${esc(s.who)}</div>
+    <div class="rorder">Order #${esc(s.order)}${isLast ? ' <span class="muted">completed</span>' : ''}</div>
+    <div class="rhead">${esc(when)} · ${esc(s.who)}</div>
     <div class="rtotal">${money(s.total)}</div><ul>${items}</ul>
     <div class="rhead" style="margin-top:6px">${s.count} card${s.count === 1 ? '' : 's'} removed from inventory</div>
     ${isLast ? '<div class="more"><a data-cact="sales">See all sales</a></div>' : ''}
   </div>`;
 }
 
-function orderNo() {
-  const d = new Date(), p = n => String(n).padStart(2, '0');
-  return `${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}-${Math.random().toString(36).slice(2, 4).toUpperCase()}`;
-}
-
+// The order number (1, 2, 3...) is handed out by the inventory sheet when the order completes,
+// so every computer shares one sequence with no repeats.
 async function completeSale() {
   if (S.selling || !S.cart.length) return;
-  if (!S.who) { toast('Enter your name (top right) first so the sale is logged'); $('#who').focus(); return; }
+  if (!S.who) { toast('Enter your name (top right) first so the order is logged'); $('#who').focus(); return; }
   if (!S.loaded) { toast('The inventory has not loaded yet'); return; }
   const missing = S.cart.find(l => l.price == null);
   if (missing) { toast(`Type a price for ${missing.name} first`); const el = document.querySelector(`.cline[data-lk="${CSS.escape(missing.lk)}"] input.pr`); if (el) el.focus(); return; }
   const cart = S.cart.map(l => ({ ...l }));
-  const order = orderNo();
   S.selling = true; renderCart();
   let j;
   try {
-    j = await api('sell', { order, who: S.who, rows: cart.map(l => ({ id: l.id, finish: l.finish, qty: l.qty, meta: { name: l.name, set: l.set, setName: l.setName, cn: l.cn } })) });
+    j = await api('sell', { who: S.who, rows: cart.map(l => ({ id: l.id, finish: l.finish, qty: l.qty, meta: { name: l.name, set: l.set, setName: l.setName, cn: l.cn } })) });
   } catch (e) {
     S.selling = false; renderCart();
-    toast('Sale NOT saved: ' + e.message.replace(/\.$/, '') + '. The order is unchanged. Check History before trying again.');
+    toast('Order NOT saved: ' + e.message.replace(/\.$/, '') + '. Nothing was removed from inventory. Check History before trying again.');
     return;
   }
   // Share what the server actually removed across this card's cart lines, in cart order.
@@ -402,6 +399,7 @@ async function completeSale() {
     const l = cart.find(x => x.key === it.key);
     setLocalQty(it.key, it.qty, { name: l.name, set: l.set, setName: l.setName, cn: l.cn });
   }
+  const order = j.order != null ? j.order : '?';
   const sale = { order, time: new Date().toISOString(), who: S.who, lines, total: lines.reduce((n, l) => n + l.price * l.sold, 0), count: lines.reduce((n, l) => n + l.sold, 0) };
   S.sales.unshift(sale); saveSales();
   ls.set('showlast', '1');
@@ -410,7 +408,7 @@ async function completeSale() {
   renderCart();
   cart.forEach(l => refreshTile(l.key));
   const short = lines.some(l => l.sold < l.qty);
-  toast(`Sale #${order} done: ${money(sale.total)}${short ? '. Some cards were no longer in stock, see the receipt.' : ''}`);
+  toast(`Order #${order} complete: ${money(sale.total)}${short ? '. Some cards were no longer in stock, see the receipt.' : ''}`);
 }
 
 function onCartClick(e) {
