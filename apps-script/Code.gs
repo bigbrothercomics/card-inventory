@@ -137,6 +137,17 @@ var ACTIONS = {
       var order = (Number(props.getProperty('ORDER_SEQ')) || 0) + 1;
       props.setProperty('ORDER_SEQ', String(order));
       var action = 'Sold #' + order;
+      // Email orders: count orders per customer name (Script Property CUSTOMER_COUNTS) so their PDF
+      // is "Jane Doe.pdf", then "Jane Doe2.pdf"... the same on every computer.
+      var customer = clean_(b.customer, 80), customerN = 0;
+      if (customer) {
+        var counts = {};
+        try { counts = JSON.parse(props.getProperty('CUSTOMER_COUNTS') || '{}'); } catch (e) { counts = {}; }
+        var ck = customer.toLowerCase();
+        customerN = counts[ck] = (Number(counts[ck]) || 0) + 1;
+        props.setProperty('CUSTOMER_COUNTS', JSON.stringify(counts));
+        action += ' (Email: ' + customer + ')';
+      }
       var now = new Date(), seq = lastSeq_(s.log), logs = [], items = [];
       list.forEach(function (it) {
         var row = findRow_(s.inv, it.key);
@@ -150,7 +161,7 @@ var ACTIONS = {
         logs.push([++seq, now, who, action, it.key, it.name, it.set, it.setName, it.cn, it.finish, -take, cur - take]);
       });
       if (logs.length) s.log.getRange(s.log.getLastRow() + 1, 1, logs.length, LOG_HEAD.length).setValues(logs);
-      return { ok: true, seq: seq, order: order, items: items };
+      return { ok: true, seq: seq, order: order, items: items, customerN: customerN };
     });
   },
 
