@@ -4,6 +4,9 @@
   --accent:#e91d25; --accent-dark:#c8141b; --accent-ink:#ffffff; --accent-soft:#fef1f1;
   --warn:#a4540f; --warn-bg:#fdf1e3; --bad:#b3141b;
 }
+/* every tile in a row is the same height; stock line and buttons sit at the bottom so they line up */
+.tile .info{flex:1}
+.tile .ctrls{margin-top:auto;display:flex;flex-direction:column;gap:6px}
 h1.brand{display:flex;align-items:center;gap:8px}
 h1.brand img{width:30px;height:30px;display:block}
 button.primary:hover:not(:disabled){background:var(--accent-dark);border-color:var(--accent-dark)}

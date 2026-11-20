@@ -214,11 +214,11 @@ function tileHTML(t, cartMode) {
     const line = S.active === lk && S.cart.find(l => l.lk === lk);
     // The card just added shows − n + for its cart line until a condition changes or another card is added.
     const action = line
-      ? `<div class="qty cartstep"><button data-act="cdec" aria-label="One fewer in cart">−</button><span class="n">${line.qty}</span><button data-act="cinc" aria-label="One more in cart" ${full ? 'disabled' : ''}>+</button><span class="muted">in cart</span></div>`
-      : `<button class="primary addcart" data-act="cart" ${full ? 'disabled' : ''}>${full ? 'All in cart' : 'Add to cart'}</button>`;
+      ? `<div class="qty cartstep"><button data-act="cdec" aria-label="One fewer in the order">−</button><span class="n">${line.qty}</span><button data-act="cinc" aria-label="One more in the order" ${full ? 'disabled' : ''}>+</button><span class="muted">in order</span></div>`
+      : `<button class="primary addcart" data-act="cart" ${full ? 'disabled' : ''}>${full ? 'All in order' : 'Add to order'}</button>`;
     controls = qty
-      ? `<div class="stockline">${qty} in stock${inCart ? ` · <span class="incart">${inCart} in cart</span>` : ''}</div>${action}`
-      : `<div class="oostag">Sold out${inCart ? ` · ${inCart} in cart` : ''}</div>`;
+      ? `<div class="stockline">${qty} in stock${inCart ? ` · <span class="incart">${inCart} in order</span>` : ''}</div>${action}`
+      : `<div class="oostag">Sold out${inCart ? ` · ${inCart} in order` : ''}</div>`;
   } else {
     controls = `${qty ? '' : '<div class="oostag">Out of stock</div>'}
       <div class="qty"><button data-act="dec" aria-label="Remove one" ${qty ? '' : 'disabled'}>−</button><span class="n">${qty}</span><button data-act="inc" aria-label="Add one">+</button></div>`;
@@ -229,7 +229,7 @@ function tileHTML(t, cartMode) {
       <div class="name">${esc(meta.name)}</div>
       <div class="sub">${esc(meta.setName)} · #${esc(meta.cn)}</div>
       ${priceHTML(t)}
-      ${controls}
+      <div class="ctrls">${controls}</div>
     </div>
   </div>`;
 }
@@ -314,7 +314,7 @@ function priceFor(t, cond) {
 function addToCart(key) {
   const t = S.tiles.get(key); if (!t) return;
   const stock = qtyOf(key);
-  if (cartCount(key) >= stock) { toast(`All ${stock} in stock are already in the cart`); return; }
+  if (cartCount(key) >= stock) { toast(`All ${stock} in stock are already in the order`); return; }
   const cond = S.cond.get(key) || 'nm';
   const lk = key + '|' + cond;
   if (!S.cart.length) ls.set('showlast', '0');   // a new cart begins: retire the last receipt (it stays on the Sales tab)
@@ -325,7 +325,7 @@ function addToCart(key) {
   S.active = lk;
   saveCart(); renderCart(); refreshTile(key);
   if (prev && prev !== key) refreshTile(prev);   // the previous card goes back to "Add to cart"
-  if (line.price == null) toast(`${t.meta.name} has no Card Kingdom price. Type a price in the cart.`);
+  if (line.price == null) toast(`${t.meta.name} has no Card Kingdom price. Type a price in the current order.`);
 }
 
 function cartAct(lk, act) {
@@ -341,13 +341,13 @@ function cartAct(lk, act) {
 function renderCart() {
   const box = $('#cart'); if (!box) return;
   const n = S.cart.reduce((a, l) => a + l.qty, 0);
-  let h = `<h2><span>Cart${n ? ` · ${n} card${n === 1 ? '' : 's'}` : ''}</span>${S.cart.length ? '<button data-cact="clear" title="Empty the cart without changing inventory">Clear</button>' : ''}</h2>`;
-  if (!S.cart.length) h += '<p class="muted" style="margin:4px 0 8px">Empty. Find a card and press Add to cart.</p>';
+  let h = `<h2><span>Current order${n ? ` · ${n} card${n === 1 ? '' : 's'}` : ''}</span>${S.cart.length ? '<button data-cact="clear" title="Empty the current order without changing inventory">Clear</button>' : ''}</h2>`;
+  if (!S.cart.length) h += '<p class="muted" style="margin:4px 0 8px">Empty. Find a card and press Add to order.</p>';
   for (const l of S.cart) {
     const stock = qtyOf(l.key);
     h += `<div class="cline" data-lk="${esc(l.lk)}">
       <div class="top"><div><div class="name">${esc(l.name)}${finLabel(l.finish)}</div><div class="sub">${esc(l.setName)} · #${esc(l.cn)} · ${CONDLABEL[l.cond]}</div></div>
-        <button class="rm" data-cact="rm" title="Remove from cart" aria-label="Remove from cart">×</button></div>
+        <button class="rm" data-cact="rm" title="Remove from order" aria-label="Remove from order">×</button></div>
       <div class="ctl"><button data-cact="dec" aria-label="One fewer">−</button><span class="n">${l.qty}</span><button data-cact="inc" aria-label="One more">+</button>
         <span class="muted">×</span> $<input class="pr" type="text" inputmode="decimal" value="${l.price == null ? '' : l.price.toFixed(2)}" placeholder="price" aria-label="Price each">
         <span class="lt">${money(lineTotal(l))}</span></div>
@@ -392,7 +392,7 @@ async function completeSale() {
     j = await api('sell', { order, who: S.who, rows: cart.map(l => ({ id: l.id, finish: l.finish, qty: l.qty, meta: { name: l.name, set: l.set, setName: l.setName, cn: l.cn } })) });
   } catch (e) {
     S.selling = false; renderCart();
-    toast('Sale NOT saved: ' + e.message.replace(/\.$/, '') + '. The cart is unchanged. Check History before trying again.');
+    toast('Sale NOT saved: ' + e.message.replace(/\.$/, '') + '. The order is unchanged. Check History before trying again.');
     return;
   }
   // Share what the server actually removed across this card's cart lines, in cart order.
@@ -419,7 +419,7 @@ function onCartClick(e) {
   if (act === 'sell') return completeSale();
   if (act === 'sales') return setTab('sales');
   if (act === 'clear') {
-    if (!confirm('Empty the cart? Nothing is removed from inventory.')) return;
+    if (!confirm('Clear the current order? Nothing is removed from inventory.')) return;
     const keys = S.cart.map(l => l.key); S.cart = []; S.active = null; saveCart(); renderCart(); keys.forEach(refreshTile); return;
   }
   cartAct(b.closest('.cline').dataset.lk, act);
