@@ -116,21 +116,24 @@ var ACTIONS = {
     });
   },
 
-  // Complete a sale: remove every cart line from stock in one step. Lines asking for more than is in
+  // Complete an order: remove every line from stock in one step. Lines asking for more than is in
   // stock remove what is there; the reply says how many of each were actually removed.
+  // Orders are numbered 1, 2, 3... store-wide (Script Property ORDER_SEQ), assigned under the lock.
   sell: function (b) {
     var who = clean_(b.who, 60);
     if (!who) throw new Error('Enter your name first');
-    var order = clean_(b.order, 24);
     var merged = {}, list = [];
     (b.rows || []).slice(0, 500).forEach(function (r) {
       var it = item_(r), q = Math.max(0, Math.round(Number(r.qty) || 0));
       if (!q) return;
       if (merged[it.key]) merged[it.key].qty += q; else { it.qty = q; merged[it.key] = it; list.push(it); }
     });
-    if (!list.length) throw new Error('The cart is empty');
-    var action = 'Sold' + (order ? ' #' + order : '');
+    if (!list.length) throw new Error('The order is empty');
     return withLock_(function (s) {
+      var props = PropertiesService.getScriptProperties();
+      var order = (Number(props.getProperty('ORDER_SEQ')) || 0) + 1;
+      props.setProperty('ORDER_SEQ', String(order));
+      var action = 'Sold #' + order;
       var now = new Date(), seq = lastSeq_(s.log), logs = [], items = [];
       list.forEach(function (it) {
         var row = findRow_(s.inv, it.key);
@@ -144,7 +147,7 @@ var ACTIONS = {
         logs.push([++seq, now, who, action, it.key, it.name, it.set, it.setName, it.cn, it.finish, -take, cur - take]);
       });
       if (logs.length) s.log.getRange(s.log.getLastRow() + 1, 1, logs.length, LOG_HEAD.length).setValues(logs);
-      return { ok: true, seq: seq, items: items };
+      return { ok: true, seq: seq, order: order, items: items };
     });
   },
 
