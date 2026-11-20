@@ -96,3 +96,4 @@ button.addcart{width:100%;font-weight:600;margin-top:2px}
 .receipt .more a{color:var(--accent);cursor:pointer;text-decoration:underline}
 h1 small{font-weight:500;color:var(--muted);font-size:13px;margin-left:6px}
 a.back{color:var(--accent);font-size:14px}
+.qty.cartstep{gap:8px}

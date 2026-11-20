@@ -37,6 +37,7 @@ const S = {
   cart: [],            // [{lk, key, id, finish, cond, name, set, setName, cn, price, qty}]
   sales: [],           // finished sales on this computer, newest first
   selling: false,
+  active: null,        // cart line (key|cond) whose tile shows − n + instead of "Add to cart"
   normName: new Map(), // card name -> folded name, for fast filtering
 };
 
@@ -209,9 +210,14 @@ function tileHTML(t, cartMode) {
   if (cartMode) {
     const inCart = cartCount(key);
     const full = inCart >= qty;
+    const lk = key + '|' + (S.cond.get(key) || 'nm');
+    const line = S.active === lk && S.cart.find(l => l.lk === lk);
+    // The card just added shows − n + for its cart line until a condition changes or another card is added.
+    const action = line
+      ? `<div class="qty cartstep"><button data-act="cdec" aria-label="One fewer in cart">−</button><span class="n">${line.qty}</span><button data-act="cinc" aria-label="One more in cart" ${full ? 'disabled' : ''}>+</button><span class="muted">in cart</span></div>`
+      : `<button class="primary addcart" data-act="cart" ${full ? 'disabled' : ''}>${full ? 'All in cart' : 'Add to cart'}</button>`;
     controls = qty
-      ? `<div class="stockline">${qty} in stock${inCart ? ` · <span class="incart">${inCart} in cart</span>` : ''}</div>
-         <button class="primary addcart" data-act="cart" ${full ? 'disabled' : ''}>${full ? 'All in cart' : 'Add to cart'}</button>`
+      ? `<div class="stockline">${qty} in stock${inCart ? ` · <span class="incart">${inCart} in cart</span>` : ''}</div>${action}`
       : `<div class="oostag">Sold out${inCart ? ` · ${inCart} in cart` : ''}</div>`;
   } else {
     controls = `${qty ? '' : '<div class="oostag">Out of stock</div>'}
@@ -247,9 +253,14 @@ function onTileClick(e) {
   const key = b.closest('.tile').dataset.key;
   const act = b.dataset.act;
   if (act === 'cart') addToCart(key);
+  else if (act === 'cinc' || act === 'cdec') cartAct(S.active, act === 'cinc' ? 'inc' : 'dec');
   else if (act === 'inc') changeQty(key, 1);
   else if (act === 'dec') changeQty(key, -1);
-  else if (act === 'cond') { S.cond.set(key, b.dataset.c); refreshTile(key); }
+  else if (act === 'cond') {
+    S.cond.set(key, b.dataset.c);
+    if (S.active && S.active.startsWith(key + '|')) S.active = null;   // new condition: back to "Add to cart"
+    refreshTile(key);
+  }
 }
 
 /* ---------- tabs ---------- */
@@ -310,7 +321,10 @@ function addToCart(key) {
   let line = S.cart.find(l => l.lk === lk);
   if (line) line.qty++;
   else S.cart.push(line = { lk, key, id: t.meta.id, finish: t.finish, cond, name: t.meta.name, set: t.meta.set, setName: t.meta.setName, cn: t.meta.cn, price: priceFor(t, cond), qty: 1 });
+  const prev = S.active && S.active.split('|').slice(0, 2).join('|');
+  S.active = lk;
   saveCart(); renderCart(); refreshTile(key);
+  if (prev && prev !== key) refreshTile(prev);   // the previous card goes back to "Add to cart"
   if (line.price == null) toast(`${t.meta.name} has no Card Kingdom price. Type a price in the cart.`);
 }
 
@@ -320,6 +334,7 @@ function cartAct(lk, act) {
   if (act === 'inc') { if (cartCount(l.key) >= qtyOf(l.key)) { toast(`Only ${qtyOf(l.key)} in stock`); return; } l.qty++; }
   else if (act === 'dec') { l.qty--; if (l.qty <= 0) S.cart.splice(i, 1); }
   else if (act === 'rm') S.cart.splice(i, 1);
+  if (S.active === lk && !S.cart.some(x => x.lk === lk)) S.active = null;
   saveCart(); renderCart(); refreshTile(l.key);
 }
 
@@ -390,7 +405,7 @@ async function completeSale() {
   const sale = { order, time: new Date().toISOString(), who: S.who, lines, total: lines.reduce((n, l) => n + l.price * l.sold, 0), count: lines.reduce((n, l) => n + l.sold, 0) };
   S.sales.unshift(sale); saveSales();
   ls.set('showlast', '1');
-  S.cart = []; saveCart();
+  S.cart = []; saveCart(); S.active = null;
   S.selling = false;
   renderCart();
   cart.forEach(l => refreshTile(l.key));
@@ -405,7 +420,7 @@ function onCartClick(e) {
   if (act === 'sales') return setTab('sales');
   if (act === 'clear') {
     if (!confirm('Empty the cart? Nothing is removed from inventory.')) return;
-    const keys = S.cart.map(l => l.key); S.cart = []; saveCart(); renderCart(); keys.forEach(refreshTile); return;
+    const keys = S.cart.map(l => l.key); S.cart = []; S.active = null; saveCart(); renderCart(); keys.forEach(refreshTile); return;
   }
   cartAct(b.closest('.cline').dataset.lk, act);
 }
