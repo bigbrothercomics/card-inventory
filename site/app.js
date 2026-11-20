@@ -708,6 +708,26 @@ function pickDefault(opts, qty, set) {
   return pool.find(o => o.have >= qty) || pool.slice().sort((a, b) => b.have - a.have || (a.price ?? 1e9) - (b.price ?? 1e9))[0];
 }
 
+const OOS = '__oos';
+// When no single version has all the copies asked for, a request becomes side-by-side rows:
+// one per version we have (cheapest first, a set named in the list first), then a red row for the rest.
+// "4 Lightning Bolt" with 2 × M11 and 2 × M10 → 2 M11 | 2 M10. With only 3 in stock → … | 1 out of stock.
+function splitByStock(lines) {
+  const idx = stockIndex(), used = new Map(), out = [];
+  const take = (l, key, n) => { used.set(key, (used.get(key) || 0) + n); out.push({ ...l, qty: n, pick: key }); };
+  for (const l of lines) {
+    const opts = optionsFor(l, idx, used);
+    const one = pickDefault(opts, l.qty, l.set);
+    if (!one) { out.push(l); continue; }
+    if (one.have >= l.qty) { take(l, one.key, l.qty); continue; }
+    const pool = opts.slice().sort((a, b) => (b.meta.set === l.set) - (a.meta.set === l.set) || (a.price ?? 1e9) - (b.price ?? 1e9) || b.have - a.have);
+    let need = l.qty;
+    for (const o of pool) { if (!need) break; const n = Math.min(o.have, need); take(l, o.key, n); need -= n; }
+    if (need) out.push({ ...l, qty: need, pick: OOS, auto: true });
+  }
+  return out;
+}
+
 // Works out every line: chosen version, price, colour, and whether it counts toward the order (top to bottom).
 function computeEmail() {
   const em = S.email, idx = stockIndex(), used = new Map();
@@ -715,28 +735,39 @@ function computeEmail() {
   let total = 0, cards = 0;
   const rows = em.lines.map((l, i) => {
     const opts = optionsFor(l, idx, used);
+    // "Out of stock" picked in the version menu (by staff, or for the copies we're short after a split).
+    if (l.pick === OOS) return { i, l, opts, o: null, have: 0, price: null, lineTotal: 0, cls: E_RED, flag: l.auto ? 'Out of stock' : 'Marked out of stock', counts: false };
     const o = opts.find(x => x.key === l.pick) || pickDefault(opts, l.qty, l.set);
     const r = { i, l, opts, o, have: 0, price: null, lineTotal: 0, cls: '', flag: '', counts: false };
     if (!o) {
       r.cls = E_RED;
-      r.flag = l.found === false ? 'Not found on Scryfall. Check the spelling.' : (idx.get(norm(l.name)) || []).length ? 'Only foil in stock (Foils OK is off)' : 'Out of stock';
+      r.flag = l.found === false ? 'Not found on Scryfall. Check the spelling.' : (idx.get(norm(l.name)) || []).length ? 'Only foil in stock' : 'Out of stock';
       return r;
     }
     r.have = Math.min(l.qty, o.have);
     used.set(o.key, (used.get(o.key) || 0) + r.have);
     r.price = l.price != null ? l.price : o.price;
     const short = r.have < l.qty ? `Have ${r.have} of ${l.qty}. ` : '';
+    r.lineTotal = (r.price || 0) * r.have;
+    // Over the per-card budget: orange. Staff can still tick it to sell it anyway (it stays orange on the PDF).
     if (r.price != null && cardB != null && r.price > cardB) {
       r.cls = E_ORANGE;
       const fits = opts.some(x => x.price != null && x.price <= cardB);
       r.flag = short + `Over the ${money(cardB)} per-card budget` + (fits ? '. A cheaper version we have fits' : '');
+      if (l.checked) { r.flag += ' · added anyway'; total += r.lineTotal; cards += r.have; r.counts = true; }
       return r;
     }
-    r.lineTotal = (r.price || 0) * r.have;
     if (!l.checked) { r.flag = short; return r; }
     if (r.price == null) { r.flag = short + 'No Card Kingdom price. Type one in.'; return r; }
-    if (totalB != null && total + r.lineTotal > totalB + 1e-9) { r.cls = E_ORANGE; r.flag = short + `Would go over the ${money(totalB)} overall budget`; return r; }
-    total += r.lineTotal; cards += r.have; r.counts = true; r.flag = short;
+    // Ticked lines fill the overall budget top to bottom. One that doesn't fit turns orange and is left out,
+    // unless staff press "Add anyway".
+    if (totalB != null && total + r.lineTotal > totalB + 1e-9) {
+      r.cls = E_ORANGE;
+      r.flag = short + `Would go over the ${money(totalB)} overall budget`;
+      if (!l.force) { r.addAnyway = true; return r; }
+      r.flag += ' · added anyway';
+    }
+    total += r.lineTotal; cards += r.have; r.counts = true; if (!r.cls) r.flag = short;
     return r;
   });
   return { rows, total, cards, cardB, totalB };
@@ -751,7 +782,8 @@ function renderEmail() {
     c.rows.map(r => {
       const l = r.l, o = r.o;
       const name = l.found === false ? `<input type="text" class="en" data-e="name" value="${esc(l.name)}" aria-label="Card name">` : `<span class="ename">${esc(l.name)}</span>`;
-      const ver = o ? `<select data-e="pick" aria-label="Version">${r.opts.map(x => `<option value="${esc(x.key)}"${x.key === o.key ? ' selected' : ''}>${esc(verLabel(x))}</option>`).join('')}</select>` : '';
+      // The first choice is always "Out of stock", for when the count says we have it but the copy can't be found.
+      const ver = o || l.pick === OOS ? `<select data-e="pick" aria-label="Version"><option value="${OOS}"${o ? '' : ' selected'}>Out of stock</option>${r.opts.map(x => `<option value="${esc(x.key)}"${o && x.key === o.key ? ' selected' : ''}>${esc(verLabel(x))}</option>`).join('')}</select>` : '';
       const price = !o ? '' : o.price == null || l.price != null
         ? `$<input type="text" class="ep" data-e="price" inputmode="decimal" value="${r.price != null ? r.price.toFixed(2) : ''}" placeholder="price"> ${o.price == null ? `<a href="${esc(tcgUrl(o.meta))}" target="_blank" rel="noopener" class="hint">TCG ↗</a>` : ''}`
         : money(r.price);
@@ -760,7 +792,7 @@ function renderEmail() {
         <td><input type="text" class="eq" data-e="qty" inputmode="numeric" value="${l.qty}" aria-label="Quantity"></td>
         <td>${name}</td><td>${ver}</td><td class="muted">—</td><td>${price}</td>
         <td class="tot">${r.counts ? money(r.lineTotal) : ''}</td>
-        <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
+        <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${r.addAnyway ? ` <a href="#" data-e="force" class="hint">Add anyway</a>` : ''}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
         <td><button class="erm" data-e="rm" title="Remove this line" aria-label="Remove line">×</button></td></tr>`;
     }).join('') + '</tbody></table>';
   const left = c.totalB != null ? ` <span class="muted">· ${money(Math.max(0, c.totalB - c.total))} of ${money(c.totalB)} budget left</span>` : '';
@@ -883,20 +915,21 @@ async function checkEmailList() {
   try { await resolveNames(lines); }
   catch (e) { toast('Could not check names on Scryfall (' + e.message + '). In-stock cards still work.'); }
   finally { $('#echeck').disabled = false; }
-  S.email.lines = lines; saveEmail(); renderEmail();
+  S.email.lines = splitByStock(lines); saveEmail(); renderEmail();
 }
 
 function onEmailEvent(e) {
   const el = e.target.closest('[data-e]'); if (!el) return;
   const act = el.dataset.e, tr = el.closest('tr'), l = tr ? S.email.lines[+tr.dataset.i] : null;
-  if (e.type === 'click' && !['rm', 'more', 'tickall', 'complete'].includes(act)) return;
+  if (e.type === 'click' && !['rm', 'more', 'tickall', 'complete', 'force'].includes(act)) return;
   if (e.type === 'click') e.preventDefault();
   if (act === 'complete') return completeEmailOrder();
-  if (act === 'tickall') { const c = computeEmail(); c.rows.forEach(r => { if (r.o) r.l.checked = true; }); }
+  if (act === 'tickall') { const c = computeEmail(); c.rows.forEach(r => { if (r.o && r.cls !== E_ORANGE) r.l.checked = true; }); }   // over-budget cards are only added one by one
   else if (act === 'rm') S.email.lines.splice(+tr.dataset.i, 1);
   else if (act === 'more') { const r = computeEmail().rows[+tr.dataset.i]; S.email.lines.splice(+tr.dataset.i + 1, 0, { ...l, qty: l.qty - r.have, pick: '', price: null }); l.qty = r.have; }
-  else if (act === 'chk') l.checked = el.checked;
-  else if (act === 'pick') { l.pick = el.value; l.price = null; }
+  else if (act === 'chk') { l.checked = el.checked; if (!l.checked) l.force = false; }
+  else if (act === 'force') { l.checked = true; l.force = true; }
+  else if (act === 'pick') { l.pick = el.value; l.price = null; l.auto = false; }
   else if (act === 'qty') { const q = parseInt(el.value, 10); if (q > 0) l.qty = Math.min(999, q); }
   else if (act === 'price') l.price = parseMoney(el.value);
   else if (act === 'name') { l.name = el.value.trim(); l.found = null; l.typed = ''; resolveNames([l]).catch(() => {}).then(() => { saveEmail(); renderEmail(); }); return; }
@@ -932,15 +965,15 @@ async function completeEmailOrder() {
     const v = r.o ? `${r.o.meta.setName} #${r.o.meta.cn}${finLabel(r.o.finish)}` : '';
     if (r.counts) {
       const sold = Math.min(r.have, left.get(r.o.key) || 0); left.set(r.o.key, (left.get(r.o.key) || 0) - sold);
-      pdfRows.push(sold ? { qty: sold, asked: r.l.qty, name: r.l.name, ver: v, price: r.price, total: r.price * sold, cls: '' } : { qty: r.l.qty, asked: r.l.qty, name: r.l.name, ver: '', cls: E_RED });
+      pdfRows.push(sold ? { qty: sold, asked: r.l.qty, name: r.l.name, ver: v, price: r.price, total: r.price * sold, cls: r.cls === E_ORANGE ? E_ORANGE : '', given: true } : { qty: r.l.qty, asked: r.l.qty, name: r.l.name, ver: '', cls: E_RED });
     } else if (r.cls === E_RED) pdfRows.push({ qty: r.l.qty, asked: r.l.qty, name: r.l.name, ver: '', cls: E_RED });
     else if (r.cls === E_ORANGE) pdfRows.push({ qty: r.have, asked: r.l.qty, name: r.l.name, ver: v, price: r.price, cls: E_ORANGE });
   }
-  const done = { order: j.order, n: j.customerN || 1, cust: em.cust, time: new Date().toISOString(), rows: pdfRows, total: pdfRows.reduce((n, x) => n + (x.cls ? 0 : x.total), 0), budget: c.totalB };
+  const done = { order: j.order, n: j.customerN || 1, cust: em.cust, time: new Date().toISOString(), rows: pdfRows, total: pdfRows.reduce((n, x) => n + (x.given ? x.total : 0), 0), budget: c.totalB };
   ls.set('emaillast', JSON.stringify(done));
   S.email = emailBlank(); saveEmail(); emailFormOut();
   S.emailBusy = false; renderEmail();
-  const removed = pdfRows.filter(x => !x.cls).reduce((n, x) => n + x.qty, 0);
+  const removed = pdfRows.filter(x => x.given).reduce((n, x) => n + x.qty, 0);
   $('#emodal').innerHTML = `<div class="box" role="dialog" aria-label="Order complete"><h2>Order #${esc(done.order)} complete</h2>
     <p>${esc(done.cust)}: <b>${money(done.total)}</b>, ${removed} card${removed === 1 ? '' : 's'} removed from inventory.</p>
     <div class="row"><button data-m="close">Close</button><button class="primary" data-m="pdf">Download PDF (${esc(pdfName(done))})</button></div></div>`;
@@ -978,11 +1011,12 @@ async function emailPdf(d) {
   for (const r of d.rows) {
     if (y > 740) { doc.addPage(); y = 50; head(); }
     if (r.cls) { doc.setFillColor(...FILL[r.cls]); doc.rect(M, y - 12, W - 2 * M, 17, 'F'); }
-    doc.text(r.cls === E_RED ? String(r.asked) : r.qty < r.asked ? `${r.qty} of ${r.asked}` : String(r.qty), cols[0].x, y);
+    // Only the number of copies on that row: what we're giving them, or (red) what we couldn't. Never our stock.
+    doc.text(String(r.cls === E_RED ? r.asked : r.qty), cols[0].x, y);
     doc.text(fit(r.name, 210), cols[1].x, y);
     doc.text(fit(r.cls === E_RED ? 'Out of stock' : r.ver, 150), cols[2].x, y);
     if (r.cls !== E_RED && r.price != null) doc.text(money(r.price), cols[3].x, y, { align: 'right' });
-    doc.text(r.cls === E_RED ? '' : r.cls === E_ORANGE ? 'Over budget' : money(r.total), cols[4].x, y, { align: 'right' });
+    doc.text(r.given ? money(r.total) : r.cls === E_ORANGE ? 'Over budget' : '', cols[4].x, y, { align: 'right' });
     y += 17;
   }
   if (y > 730) { doc.addPage(); y = 50; }
