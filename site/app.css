@@ -139,3 +139,18 @@ a.back{color:var(--accent);font-size:14px}
 .modal .box{background:var(--panel);border-radius:12px;padding:18px 20px;max-width:420px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.3)}
 .modal .box h2{margin:0 0 6px;font-size:20px}
 .modal .box .row{justify-content:flex-end;margin-top:14px}
+/* past orders (back office) */
+.eform input[type=date]{font:inherit;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.ord{border:1px solid var(--line);border-radius:10px;background:var(--panel);margin:0 0 8px}
+.ord.rev{opacity:.65;background:#f6f5f2}
+.ord summary{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;padding:9px 12px;cursor:pointer;list-style:none}
+.ord summary::-webkit-details-marker{display:none}
+.ord .onum{font-weight:750;min-width:46px}
+.ord .otot{font-weight:750;margin-left:auto;font-size:16px}
+.ord .otag{font-size:12px;font-weight:650;border-radius:99px;padding:2px 8px;background:var(--accent-soft);color:var(--accent-dark)}
+.ord .otag.email{background:#eef3ff;color:#2b4fb3}
+.ord .otag.done{background:#ececec;color:#555}
+.ord .obody{padding:2px 12px 10px;border-top:1px solid var(--line)}
+.ord .obody ul{list-style:none;margin:8px 0;padding:0;font-size:14px}
+.ord .obody li{display:flex;justify-content:space-between;gap:10px;padding:2px 0}
+.ord .obody .row{justify-content:flex-end}

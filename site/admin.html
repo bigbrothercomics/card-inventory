@@ -6,7 +6,7 @@
 <title>Back Office · All Seeing Inventory</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="logo.png">
-<link rel="stylesheet" href="app.css?v=11">
+<link rel="stylesheet" href="app.css?v=12">
 </head>
 <body data-mode="admin">
 <header>
@@ -17,6 +17,7 @@
       <button data-tab="stock">Edit stock</button>
       <button data-tab="missing">Missing cards</button>
       <button data-tab="email">Email orders</button>
+      <button data-tab="orders">Past orders</button>
       <button data-tab="history">History</button>
     </div>
     <span class="spacer"></span>
@@ -81,6 +82,24 @@
     <div class="efoot" id="efoot"></div>
   </section>
 
+  <section id="v-orders" hidden>
+    <div class="eform">
+      <label>From<input type="date" id="ofrom"></label>
+      <label>To<input type="date" id="oto"></label>
+      <label>Customer, staff or order #<input type="search" id="oq" placeholder="e.g. Jane, #12" size="18"></label>
+      <label>Total at least $<input type="text" id="omin" inputmode="decimal" placeholder="any" size="6"></label>
+      <label>Total at most $<input type="text" id="omax" inputmode="decimal" placeholder="any" size="6"></label>
+      <label class="chk"><input type="checkbox" id="oshowrev" checked> Show reversed</label>
+      <button id="ogo" class="primary">Search</button>
+    </div>
+    <div class="row" style="gap:6px;margin:-2px 0 8px">
+      <span class="muted">Quick:</span>
+      <button data-range="today">Today</button><button data-range="yesterday">Yesterday</button><button data-range="7">Last 7 days</button><button data-range="30">Last 30 days</button><button data-range="all">All time</button>
+    </div>
+    <p class="note" id="onote"></p>
+    <div id="olist"></div>
+  </section>
+
   <section id="v-history" hidden>
     <p class="note">Most recent 300 changes by anyone, newest first.</p>
     <div id="hist"></div>
@@ -90,6 +109,6 @@
 <div id="toast"></div>
 
 <script src="config.js"></script>
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

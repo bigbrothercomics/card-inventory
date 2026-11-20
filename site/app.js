@@ -266,13 +266,14 @@ function onTileClick(e) {
 }
 
 /* ---------- tabs ---------- */
-const VIEWS = { sell: ['sell', 'sales'], admin: ['add', 'stock', 'missing', 'email', 'history'] }[MODE];
+const VIEWS = { sell: ['sell', 'sales'], admin: ['add', 'stock', 'missing', 'email', 'orders', 'history'] }[MODE];
 function setTab(tab) {
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   VIEWS.forEach(t => { $('#v-' + t).hidden = t !== tab; });
   renderAll();
   if (tab === 'history') renderHistory();
   if (tab === 'missing') loadMissing();
+  if (tab === 'orders' && !S.ordersLoaded) { setOrderRange('7'); loadOrders(); }
 }
 function currentTab() { return (document.querySelector('.tabs button.on') || {}).dataset.tab; }
 function renderAll() {
@@ -391,7 +392,7 @@ async function completeSale() {
   S.selling = true; renderCart();
   let j;
   try {
-    j = await api('sell', { who: S.who, rows: cart.map(l => ({ id: l.id, finish: l.finish, qty: l.qty, meta: { name: l.name, set: l.set, setName: l.setName, cn: l.cn } })) });
+    j = await api('sell', { who: S.who, rows: cart.map(l => ({ id: l.id, finish: l.finish, qty: l.qty, price: l.price, meta: { name: l.name, set: l.set, setName: l.setName, cn: l.cn } })) });
   } catch (e) {
     S.selling = false; renderCart();
     toast('Order NOT saved: ' + e.message.replace(/\.$/, '') + '. Nothing was removed from inventory. Check History before trying again.');
@@ -951,7 +952,7 @@ async function completeEmailOrder() {
   S.emailBusy = true; renderEmail();
   let j;
   try {
-    j = await api('sell', { who: S.who, customer: em.cust, rows: take.map(r => ({ id: r.o.meta.id, finish: r.o.finish, qty: r.have, meta: { name: r.o.meta.name, set: r.o.meta.set, setName: r.o.meta.setName, cn: r.o.meta.cn } })) });
+    j = await api('sell', { who: S.who, customer: em.cust, rows: take.map(r => ({ id: r.o.meta.id, finish: r.o.finish, qty: r.have, price: r.price, meta: { name: r.o.meta.name, set: r.o.meta.set, setName: r.o.meta.setName, cn: r.o.meta.cn } })) });
   } catch (e) {
     S.emailBusy = false; renderEmail();
     toast('Order NOT saved: ' + e.message.replace(/\.$/, '') + '. Nothing was removed from inventory.');
@@ -1031,6 +1032,73 @@ async function downloadEmailPdf() {
   let d; try { d = JSON.parse(ls.get('emaillast')); } catch (e) {}
   if (!d) { toast('No completed email order on this computer yet'); return; }
   try { await emailPdf(d); } catch (e) { toast('PDF failed: ' + e.message); }
+}
+
+/* ---------- past orders ---------- */
+// Find completed orders (sales screen and email orders) by day, customer/staff/order number and total,
+// and reverse one: every card in it goes back into stock, logged "Reversed #N".
+const dayStr = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function setOrderRange(r) {
+  const today = new Date(), from = new Date();
+  if (r === 'all') { $('#ofrom').value = ''; $('#oto').value = ''; return; }
+  if (r === 'yesterday') { from.setDate(today.getDate() - 1); $('#ofrom').value = $('#oto').value = dayStr(from); return; }
+  if (r !== 'today') from.setDate(today.getDate() - (Number(r) - 1));
+  $('#ofrom').value = dayStr(from); $('#oto').value = dayStr(today);
+}
+
+async function loadOrders() {
+  const from = $('#ofrom').value, to = $('#oto').value;
+  if (from && to && from > to) { toast('"From" is after "To"'); return; }
+  const min = $('#omin').value.trim(), max = $('#omax').value.trim();
+  if ((min && parseMoney(min) == null) || (max && parseMoney(max) == null)) { toast('Type the totals as numbers, e.g. 25'); return; }
+  S.ordersLoaded = true;
+  $('#onote').textContent = 'Loading orders…'; $('#onote').classList.remove('err');
+  try {
+    const j = await api('orders', {
+      from: from ? new Date(from + 'T00:00:00').toISOString() : '',            // whole days, in this computer's time zone
+      to: to ? new Date(to + 'T23:59:59.999').toISOString() : '',
+      q: $('#oq').value.trim(), min: min ? parseMoney(min) : '', max: max ? parseMoney(max) : '', limit: 500,
+    });
+    S.orders = j.orders; S.ordersCount = j.count;
+    renderOrders();
+  } catch (e) { $('#onote').textContent = 'Could not load orders: ' + e.message; $('#onote').classList.add('err'); }
+}
+
+function renderOrders() {
+  const list = (S.orders || []).filter(o => $('#oshowrev').checked || !o.reversed);
+  const when = s => new Date(s).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const live = list.filter(o => !o.reversed);
+  const sum = live.reduce((n, o) => n + (o.total || 0), 0), cards = live.reduce((n, o) => n + o.cards, 0);
+  $('#onote').textContent = !list.length ? 'No orders match.' :
+    `${list.length} order${list.length === 1 ? '' : 's'}` + (S.ordersCount > S.orders.length ? ` (showing the newest ${S.orders.length} of ${S.ordersCount})` : '') +
+    ` · ${cards} card${cards === 1 ? '' : 's'} · ${money(sum)} not counting reversed orders` + (live.some(o => o.total == null) ? ' (some older orders have no price recorded)' : '') + '.';
+  $('#olist').innerHTML = list.map(o => {
+    const items = o.items.map(x => `<li><span>${x[1]} × ${esc(x[3] || 'Card')}${finLabel(String(x[0]).split('|')[1])} <span class="muted">${esc(String(x[4] || '').toUpperCase())}${x[6] ? ' #' + esc(x[6]) : ''}</span></span><span>${x[2] != null ? money(x[2] * x[1]) : ''}</span></li>`).join('');
+    return `<details class="ord${o.reversed ? ' rev' : ''}" data-order="${esc(o.order)}">
+      <summary><span class="onum">#${esc(o.order)}</span><span>${esc(when(o.time))}</span>
+        ${o.customer ? `<span class="otag email">Email: ${esc(o.customer)}</span>` : '<span class="otag">In store</span>'}
+        <span class="muted">by ${esc(o.who)} · ${o.cards} card${o.cards === 1 ? '' : 's'}</span>
+        ${o.reversed ? `<span class="otag done">Reversed ${esc(when(o.reversed))} by ${esc(o.reversedBy)}</span>` : ''}
+        <span class="otot">${o.total != null ? money(o.total) : '<span class="muted" style="font-size:13px;font-weight:500">no price recorded</span>'}</span></summary>
+      <div class="obody"><ul>${items}</ul>
+        <div class="row">${o.reversed ? '<span class="muted">These cards were already put back into stock.</span>' : `<button data-oact="reverse">Reverse order: put these ${o.cards} card${o.cards === 1 ? '' : 's'} back in stock</button>`}</div></div>
+    </details>`;
+  }).join('');
+}
+
+async function onOrdersClick(e) {
+  const b = e.target.closest('[data-oact]'); if (!b) return;
+  const order = b.closest('.ord').dataset.order;
+  const o = (S.orders || []).find(x => String(x.order) === order); if (!o) return;
+  if (!S.who) { toast('Enter your name (top right) first so the reversal is logged'); $('#who').focus(); return; }
+  if (!confirm(`Reverse order #${order}${o.customer ? ' for ' + o.customer : ''}${o.total != null ? ' (' + money(o.total) + ')' : ''}?\n\nThis puts ${o.cards} card${o.cards === 1 ? '' : 's'} back into inventory. It can't be undone from here.`)) return;
+  b.disabled = true; b.textContent = 'Reversing…';
+  try {
+    const j = await api('reverse', { order, who: S.who });
+    j.items.forEach(x => { setLocalQty(x.key, x.qty, x); refreshTile(x.key); });
+    toast(`Order #${order} reversed: ${o.cards} card${o.cards === 1 ? '' : 's'} back in stock`);
+    await loadOrders();
+  } catch (x) { b.disabled = false; b.textContent = 'Reverse order'; toast('Not reversed: ' + x.message); }
 }
 
 /* ---------- CSV ---------- */
@@ -1125,6 +1193,12 @@ async function init() {
       S.email = emailBlank(); saveEmail(); emailFormOut(); renderEmail(); $('#enote').textContent = '';
     });
     $('#elastpdf').addEventListener('click', downloadEmailPdf);
+    $('#ogo').addEventListener('click', loadOrders);
+    ['#oq', '#omin', '#omax'].forEach(s => $(s).addEventListener('keydown', e => { if (e.key === 'Enter') loadOrders(); }));
+    ['#ofrom', '#oto'].forEach(s => $(s).addEventListener('change', loadOrders));
+    $('#oshowrev').addEventListener('change', renderOrders);
+    document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { setOrderRange(b.dataset.range); loadOrders(); }));
+    $('#olist').addEventListener('click', onOrdersClick);
     // Budget and foil answers re-check the table straight away; the rest is just saved.
     ['#ecust', '#ecard', '#etotal', '#efoil', '#enotes', '#elist'].forEach(s => $(s).addEventListener('input', debounce(() => { emailFormIn(); saveEmail(); renderEmail(); }, 250)));
     $('#efoil').addEventListener('change', () => { emailFormIn(); saveEmail(); renderEmail(); });
