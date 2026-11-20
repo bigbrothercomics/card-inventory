@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Back Office · Card Inventory</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="app.css?v=3">
+</head>
+<body data-mode="admin">
+<header>
+  <div class="row">
+    <h1>Card Inventory <small>Back office</small></h1>
+    <div class="tabs row" style="gap:4px">
+      <button data-tab="add" class="on">Add stock</button>
+      <button data-tab="stock">Edit stock</button>
+      <button data-tab="history">History</button>
+    </div>
+    <span class="spacer"></span>
+    <a class="back" href="./">Sales screen</a>
+    <span class="status" id="sync"></span>
+    <button id="export" title="Download the whole inventory as a CSV backup">Export CSV</button>
+    <label class="btn" title="Set each listed card's quantity to the file's value">Import CSV…<input type="file" id="importfile" accept=".csv,text/csv" hidden></label>
+    <input type="text" id="who" placeholder="Your name" size="14" aria-label="Your name">
+  </div>
+</header>
+
+<main>
+  <div id="banner"></div>
+  <p class="hint" id="cksummary" style="margin:0 0 10px">Loading Card Kingdom prices…</p>
+
+  <section id="v-add">
+    <div class="row">
+      <input type="search" id="aq" class="big" placeholder="Card name to add, e.g. Lightning Bolt or vic riva" autocomplete="off" autofocus>
+      <button id="go" class="primary">Search</button>
+      <label class="chk"><input type="checkbox" id="oos" checked> Show out of stock</label>
+    </div>
+    <p class="note" id="searchnote">Search shows every printing from Scryfall. Press + to add a copy to stock, − to remove one.</p>
+    <div class="grid" id="agrid"></div>
+  </section>
+
+  <section id="v-stock" hidden>
+    <div class="row">
+      <input type="search" id="sq" class="big" placeholder="Filter what's in stock, e.g. vic riva" autocomplete="off">
+      <span class="muted" id="stockcount"></span>
+    </div>
+    <p class="note" id="stocknote"></p>
+    <div class="grid" id="stockgrid"></div>
+  </section>
+
+  <section id="v-history" hidden>
+    <p class="note">Most recent 300 changes by anyone, newest first.</p>
+    <div id="hist"></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script src="config.js"></script>
+<script src="app.js?v=3"></script>
+</body>
+</html>

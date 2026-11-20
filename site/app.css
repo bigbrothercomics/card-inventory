@@ -1,0 +1,98 @@
+:root{
+  --bg:#f6f5f1; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6a64; --line:#e2e0d8;
+  --accent:#2f5d50; --accent-ink:#ffffff; --warn:#a4540f; --warn-bg:#fdf1e3; --bad:#9b2c2c;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+h1{font-size:17px;margin:0 8px 0 0}
+.spacer{flex:1}
+input[type=text],input[type=search]{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;min-width:0}
+input.big{flex:1;min-width:220px;font-size:17px;padding:10px 12px}
+button,.btn{font:inherit;border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;cursor:pointer;color:var(--ink)}
+button:hover,.btn:hover{border-color:#bdbab0}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.tabs button{border-radius:8px 8px 0 0;border-bottom:none}
+.tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+label.chk{display:flex;gap:6px;align-items:center;user-select:none;cursor:pointer}
+main{padding:14px 16px 60px;max-width:1500px;margin:0 auto}
+.note{color:var(--muted);margin:6px 0 12px}
+.banner{background:var(--warn-bg);color:var(--warn);border:1px solid #f0d3ae;border-radius:8px;padding:8px 12px;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+.tile.oos{opacity:.6}
+.imgwrap{position:relative;background:#ddd;aspect-ratio:488/680}
+.imgwrap img{width:100%;height:100%;display:block;object-fit:cover}
+.badge{position:absolute;top:8px;left:8px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px;color:#fff;background:linear-gradient(135deg,#7b5cff,#17b3d4,#f2a93b)}
+.badge.etched{background:#5b4a2e}
+.info{padding:10px;display:flex;flex-direction:column;gap:6px}
+.name{font-weight:600}
+.sub{color:var(--muted);font-size:13px}
+.price{display:flex;flex-direction:column;gap:4px}
+.amt{font-size:22px;font-weight:650;letter-spacing:-.01em}
+.amt a{color:inherit;text-decoration:none}
+.amt a:hover{text-decoration:underline}
+.tcg a{color:var(--warn);font-weight:600}
+.hint{font-size:12px;color:var(--muted)}
+.conds{display:flex;gap:4px}
+.conds button{padding:2px 8px;font-size:12px;border-radius:6px}
+.conds button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.qty{display:flex;align-items:center;gap:10px;margin-top:2px}
+.qty .n{min-width:28px;text-align:center;font-weight:650;font-size:17px}
+.qty button{width:34px;height:34px;padding:0;font-size:18px;line-height:1}
+.oostag{font-size:12px;color:var(--bad);font-weight:600}
+table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);font-size:14px}
+th{background:#faf9f5}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:99px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:20;max-width:90vw}
+#toast.show{opacity:1}
+.status{font-size:13px;color:var(--muted)}
+.status.bad{color:var(--bad);font-weight:600}
+.tile.busy .qty .n{opacity:.5}
+details.ck{margin:0 0 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+details.ck summary{cursor:pointer}
+details.ck .row{margin-top:8px}
+.muted{color:var(--muted)}
+.err{color:var(--bad)}
+/* cart */
+.searchwrap{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:16px;align-items:start}
+@media (max-width:900px){.searchwrap{grid-template-columns:1fr}}
+aside.cart{position:sticky;top:66px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;max-height:calc(100vh - 80px);overflow:auto}
+@media (max-width:900px){aside.cart{position:static;max-height:none}}
+.cart h2{font-size:17px;margin:0 0 6px;display:flex;justify-content:space-between;align-items:center}
+.cart h2 button{font-size:12px;padding:3px 8px}
+.cline{padding:8px 0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:4px}
+.cline .top{display:flex;justify-content:space-between;gap:8px}
+.cline .ctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cline .ctl button{width:28px;height:28px;padding:0;line-height:1}
+.cline .ctl .n{min-width:20px;text-align:center;font-weight:650}
+.cline input.pr{width:78px;text-align:right;padding:4px 6px}
+.cline .lt{margin-left:auto;font-weight:650}
+.cline .warn{color:var(--bad);font-size:12px;font-weight:600}
+.cline .rm{border:none;background:none;color:var(--muted);font-size:18px;padding:0 4px;width:auto;height:auto}
+.total{display:flex;justify-content:space-between;align-items:baseline;font-size:22px;font-weight:700;margin:10px 0 8px}
+button.sell{width:100%;font-size:17px;padding:12px;font-weight:650}
+button:disabled{opacity:.5;cursor:default}
+.receipt{margin-top:16px;border:2px solid var(--accent);border-radius:10px;padding:10px 12px;background:#f3f8f6}
+.receipt .rhead{font-size:13px;color:var(--muted)}
+.receipt .rtotal{font-size:30px;font-weight:750;color:var(--accent);margin:2px 0 6px}
+.receipt ul{margin:0;padding:0 0 0 0;list-style:none;font-size:14px}
+.receipt li{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.receipt .short{color:var(--bad);font-size:12px}
+details.sales{margin-top:12px}
+details.sales summary{cursor:pointer;color:var(--muted)}
+details.sale{border-top:1px solid var(--line);padding:6px 0}
+details.sale summary{display:flex;justify-content:space-between;color:var(--ink)}
+.stockline{font-size:13px;color:var(--muted)}
+.incart{color:var(--accent);font-weight:600}
+button.addcart{width:100%;font-weight:600;margin-top:2px}
+/* sales tab + back office */
+.salesum{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;margin:0 0 12px}
+.salesum b{font-size:22px}
+.salelist{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.salelist .receipt{margin-top:0;border-width:1px;background:var(--panel)}
+.receipt .more{margin-top:8px;font-size:13px}
+.receipt .more a{color:var(--accent);cursor:pointer;text-decoration:underline}
+h1 small{font-weight:500;color:var(--muted);font-size:13px;margin-left:6px}
+a.back{color:var(--accent);font-size:14px}
