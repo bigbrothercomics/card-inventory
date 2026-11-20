@@ -6,7 +6,7 @@
 <title>Back Office · All Seeing Inventory</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="logo.png">
-<link rel="stylesheet" href="app.css?v=7">
+<link rel="stylesheet" href="app.css?v=8">
 </head>
 <body data-mode="admin">
 <header>
@@ -15,6 +15,7 @@
     <div class="tabs row" style="gap:4px">
       <button data-tab="add" class="on">Add stock</button>
       <button data-tab="stock">Edit stock</button>
+      <button data-tab="missing">Missing cards</button>
       <button data-tab="history">History</button>
     </div>
     <span class="spacer"></span>
@@ -49,6 +50,16 @@
     <div class="grid" id="stockgrid"></div>
   </section>
 
+  <section id="v-missing" hidden>
+    <div class="row">
+      <input type="search" id="mq" class="big" placeholder="Add a card we're missing, e.g. Lightning Bolt" autocomplete="off">
+      <button id="madd" class="primary">Add to missing</button>
+      <input type="search" id="mf" placeholder="Filter the list" autocomplete="off" aria-label="Filter missing cards">
+    </div>
+    <p class="note" id="missnote">Loading…</p>
+    <div class="grid" id="missgrid"></div>
+  </section>
+
   <section id="v-history" hidden>
     <p class="note">Most recent 300 changes by anyone, newest first.</p>
     <div id="hist"></div>
@@ -57,6 +68,6 @@
 <div id="toast"></div>
 
 <script src="config.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

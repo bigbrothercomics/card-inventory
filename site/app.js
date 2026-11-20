@@ -264,12 +264,13 @@ function onTileClick(e) {
 }
 
 /* ---------- tabs ---------- */
-const VIEWS = { sell: ['sell', 'sales'], admin: ['add', 'stock', 'history'] }[MODE];
+const VIEWS = { sell: ['sell', 'sales'], admin: ['add', 'stock', 'missing', 'history'] }[MODE];
 function setTab(tab) {
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   VIEWS.forEach(t => { $('#v-' + t).hidden = t !== tab; });
   renderAll();
   if (tab === 'history') renderHistory();
+  if (tab === 'missing') loadMissing();
 }
 function currentTab() { return (document.querySelector('.tabs button.on') || {}).dataset.tab; }
 function renderAll() {
@@ -278,6 +279,7 @@ function renderAll() {
   else if (t === 'sales') renderSales();
   else if (t === 'add') renderSearch();
   else if (t === 'stock') renderStock();
+  else if (t === 'missing') renderMissing();
 }
 
 /* =====================================================================
@@ -539,6 +541,89 @@ async function renderHistory() {
     rows.map(r => `<tr><td>${esc(when(r.time))}</td><td>${esc(r.who)}</td><td>${esc(r.action)} (${esc(chg(r.change))})</td><td>${esc(r.name)}${r.setName ? ' <span class="muted">(' + esc(r.setName) + (r.cn ? ' #' + esc(r.cn) : '') + ')</span>' : ''}</td><td>${esc(r.finish)}</td><td>${esc(r.qty)}</td></tr>`).join('') + '</tbody></table>';
 }
 
+/* ---------- missing cards ---------- */
+// One entry per card (oracle id), shown as its original printing. The Scryfall extension adds to the same list.
+async function originalPrinting(oracle) {
+  for (const q of [`oracleid:${oracle} game:paper -is:promo`, `oracleid:${oracle}`]) {
+    const r = await sfSearch(q + '', 'released&dir=asc');
+    if (r.cards.length) return r.cards[0];
+  }
+  throw new Error('Scryfall has no printing for that card');
+}
+
+async function loadMissing() {
+  if (S.missingBusy) return;
+  S.missingBusy = true;
+  try { S.missing = (await api('missing')).cards; renderMissing(); }
+  catch (e) { $('#missnote').textContent = 'Could not load Missing Cards: ' + e.message; $('#missnote').classList.add('err'); }
+  finally { S.missingBusy = false; }
+}
+
+// Copies in stock of any printing with this exact card name.
+function stockByName() {
+  const m = new Map();
+  for (const e of S.inv.values()) if (e.qty > 0) m.set(e.name, (m.get(e.name) || 0) + e.qty);
+  return m;
+}
+
+function renderMissing() {
+  const grid = $('#missgrid'), note = $('#missnote');
+  if (!S.missing) { note.textContent = 'Loading…'; return; }
+  note.classList.remove('err');
+  const toks = words($('#mf').value);
+  const have = stockByName();
+  const list = S.missing.filter(c => !toks.length || toks.every(t => norm(c.name).includes(t))).sort((a, b) => a.name.localeCompare(b.name));
+  const nowIn = S.missing.filter(c => have.get(c.name)).length;
+  note.textContent = `${S.missing.length.toLocaleString()} card${S.missing.length === 1 ? '' : 's'} on the list` +
+    (nowIn ? `, ${nowIn} now in stock (marked green; remove them when you're sure).` : '.') +
+    (toks.length ? ` ${list.length} match the filter.` : '');
+  grid.innerHTML = list.slice(0, 400).map(c => {
+    const q = have.get(c.name) || 0;
+    const when = c.added ? new Date(c.added).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    return `<div class="tile" data-oracle="${esc(c.oracle)}">
+      <div class="imgwrap"><img loading="lazy" src="${esc(imgFor(c.id))}" alt="${esc(c.name)}"></div>
+      <div class="info">
+        <div class="name">${esc(c.name)}</div>
+        <div class="sub">${esc(c.setName)} · #${esc(c.cn)}</div>
+        <div class="sub">Added ${esc(when)}${c.who ? ' by ' + esc(c.who) : ''}</div>
+        <div class="ctrls">${q ? `<div class="instock-now">In stock now: ${q}</div>` : ''}
+          <button data-mact="rm">Remove from missing</button></div>
+      </div></div>`;
+  }).join('');
+}
+
+async function addMissingByName() {
+  const name = $('#mq').value.trim();
+  if (!name) return;
+  if (!S.who) { toast('Enter your name (top right) first'); $('#who').focus(); return; }
+  $('#madd').disabled = true;
+  try {
+    await throttle();
+    const r = await fetch('https://api.scryfall.com/cards/named?fuzzy=' + encodeURIComponent(name), { headers: SF_HEADERS });
+    if (!r.ok) throw new Error(r.status === 404 ? `Scryfall found no card called "${name}"` : 'Scryfall returned ' + r.status);
+    const card = await r.json();
+    const orig = await originalPrinting(card.oracle_id || (card.card_faces && card.card_faces[0].oracle_id));
+    const j = await api('missingAdd', { who: S.who, oracle: orig.oracle_id || card.oracle_id, id: orig.id, name: orig.name, set: orig.set, setName: orig.set_name, cn: orig.collector_number });
+    toast(j.already ? `${card.name} is already on Missing Cards` : `Added ${card.name} (${orig.set_name}) to Missing Cards`);
+    $('#mq').value = '';
+    await loadMissing();
+  } catch (e) { toast('Not added: ' + e.message); }
+  finally { $('#madd').disabled = false; }
+}
+
+async function onMissingClick(e) {
+  const b = e.target.closest('[data-mact]'); if (!b) return;
+  const tile = b.closest('.tile'), oracle = tile.dataset.oracle;
+  const c = (S.missing || []).find(x => x.oracle === oracle);
+  b.disabled = true;
+  try {
+    await api('missingRemove', { oracle, who: S.who });
+    S.missing = S.missing.filter(x => x.oracle !== oracle);
+    renderMissing();
+    toast(`Removed ${c ? c.name : 'card'} from Missing Cards`);
+  } catch (x) { b.disabled = false; toast('Not removed: ' + x.message); }
+}
+
 /* ---------- CSV ---------- */
 function parseCSV(text) {
   const rows = []; let row = [], f = '', q = false;
@@ -619,6 +704,10 @@ async function init() {
     $('#sq').addEventListener('input', debounce(renderStock, 120));
     $('#agrid').addEventListener('click', onTileClick);
     $('#stockgrid').addEventListener('click', onTileClick);
+    $('#madd').addEventListener('click', addMissingByName);
+    $('#mq').addEventListener('keydown', e => { if (e.key === 'Enter') addMissingByName(); });
+    $('#mf').addEventListener('input', debounce(renderMissing, 120));
+    $('#missgrid').addEventListener('click', onMissingClick);
     $('#export').addEventListener('click', exportCSV);
     $('#importfile').addEventListener('change', async e => {
       const f = e.target.files[0]; if (!f) return;

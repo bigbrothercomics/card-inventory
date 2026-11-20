@@ -9,6 +9,8 @@
 .tile .ctrls{margin-top:auto;display:flex;flex-direction:column;gap:6px}
 .receipt .rorder{font-size:18px;font-weight:700}
 .receipt .rorder .muted{font-size:13px;font-weight:500}
+.instock-now{color:#1a7f37;font-weight:650;font-size:13px}
+.tile:has(.instock-now){border-color:#1a7f37}
 h1.brand{display:flex;align-items:center;gap:8px}
 h1.brand img{width:30px;height:30px;display:block}
 button.primary:hover:not(:disabled){background:var(--accent-dark);border-color:var(--accent-dark)}
