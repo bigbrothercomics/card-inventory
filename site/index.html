@@ -62,6 +62,38 @@ details.ck summary{cursor:pointer}
 details.ck .row{margin-top:8px}
 .muted{color:var(--muted)}
 .err{color:var(--bad)}
+/* cart */
+.searchwrap{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:16px;align-items:start}
+@media (max-width:900px){.searchwrap{grid-template-columns:1fr}}
+aside.cart{position:sticky;top:66px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;max-height:calc(100vh - 80px);overflow:auto}
+@media (max-width:900px){aside.cart{position:static;max-height:none}}
+.cart h2{font-size:17px;margin:0 0 6px;display:flex;justify-content:space-between;align-items:center}
+.cart h2 button{font-size:12px;padding:3px 8px}
+.cline{padding:8px 0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:4px}
+.cline .top{display:flex;justify-content:space-between;gap:8px}
+.cline .ctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cline .ctl button{width:28px;height:28px;padding:0;line-height:1}
+.cline .ctl .n{min-width:20px;text-align:center;font-weight:650}
+.cline input.pr{width:78px;text-align:right;padding:4px 6px}
+.cline .lt{margin-left:auto;font-weight:650}
+.cline .warn{color:var(--bad);font-size:12px;font-weight:600}
+.cline .rm{border:none;background:none;color:var(--muted);font-size:18px;padding:0 4px;width:auto;height:auto}
+.total{display:flex;justify-content:space-between;align-items:baseline;font-size:22px;font-weight:700;margin:10px 0 8px}
+button.sell{width:100%;font-size:17px;padding:12px;font-weight:650}
+button:disabled{opacity:.5;cursor:default}
+.receipt{margin-top:16px;border:2px solid var(--accent);border-radius:10px;padding:10px 12px;background:#f3f8f6}
+.receipt .rhead{font-size:13px;color:var(--muted)}
+.receipt .rtotal{font-size:30px;font-weight:750;color:var(--accent);margin:2px 0 6px}
+.receipt ul{margin:0;padding:0 0 0 0;list-style:none;font-size:14px}
+.receipt li{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.receipt .short{color:var(--bad);font-size:12px}
+details.sales{margin-top:12px}
+details.sales summary{cursor:pointer;color:var(--muted)}
+details.sale{border-top:1px solid var(--line);padding:6px 0}
+details.sale summary{display:flex;justify-content:space-between;color:var(--ink)}
+.stockline{font-size:13px;color:var(--muted)}
+.incart{color:var(--accent);font-weight:600}
+button.addcart{width:100%;font-weight:600;margin-top:2px}
 </style>
 </head>
 <body>
@@ -86,13 +118,18 @@ details.ck .row{margin-top:8px}
   <p class="hint" id="cksummary" style="margin:0 0 10px">Loading Card Kingdom prices…</p>
 
   <section id="v-search">
-    <div class="row">
-      <input type="search" id="q" class="big" placeholder="Search a card name, e.g. Lightning Bolt" autocomplete="off" autofocus>
-      <button id="go" class="primary">Search</button>
-      <label class="chk"><input type="checkbox" id="oos"> Show out of stock</label>
+    <div class="searchwrap">
+      <div>
+        <div class="row">
+          <input type="search" id="q" class="big" placeholder="Search a card name, e.g. Lightning Bolt" autocomplete="off" autofocus>
+          <button id="go" class="primary">Search</button>
+          <label class="chk"><input type="checkbox" id="oos"> Show out of stock</label>
+        </div>
+        <p class="note" id="searchnote">Search a card, pick its condition, and press Add to cart. Printings you don't have in stock are hidden unless "Show out of stock" is ticked.</p>
+        <div class="grid" id="grid"></div>
+      </div>
+      <aside class="cart" id="cart" aria-label="Cart"></aside>
     </div>
-    <p class="note" id="searchnote">Search shows every printing from Scryfall. Printings you don't have in stock are hidden unless "Show out of stock" is ticked.</p>
-    <div class="grid" id="grid"></div>
   </section>
 
   <section id="v-stock" hidden>
@@ -142,7 +179,11 @@ const S = {
   pending: new Map(),  // tile key -> number of saves in flight
   who: '',
   searchSeq: 0,
+  cart: [],            // [{lk, key, id, finish, cond, name, set, setName, cn, price, qty}]
+  sales: [],           // finished sales on this computer, newest first
+  selling: false,
 };
+const money = n => '$' + (Number(n) || 0).toFixed(2);
 
 /* ---------- shared inventory (Google Sheet via Apps Script) ---------- */
 async function api(action, data) {
@@ -170,6 +211,7 @@ async function loadInventory() {
   S.seq = j.seq; S.loaded = true;
   setSync('Inventory up to date');
   renderAll();
+  renderCart();
 }
 
 let polling = false;
@@ -196,6 +238,7 @@ function applyChanges(list) {
   }
   touched.forEach(refreshTile);
   if (touched.size && currentTab() === 'stock') updateStockCount();
+  if (S.cart.some(l => touched.has(l.key))) renderCart();
 }
 
 function setLocalQty(key, qty, info) {
@@ -278,34 +321,189 @@ function priceHTML(t) {
   </div>`;
 }
 
-function tileHTML(t) {
+// Search tiles (cartMode) sell from stock with "Add to cart"; In stock tiles adjust the count with + / −.
+// A search tile that is out of stock keeps + / − so new stock can still be added from a search.
+function tileHTML(t, cartMode) {
   const { key, meta, finish } = t;
   const qty = qtyOf(key);
   const busy = S.pending.get(key) ? ' busy' : '';
   const badge = finish === 'foil' ? '<span class="badge">Foil</span>' : finish === 'etched' ? '<span class="badge etched">Etched</span>' : '';
+  let controls;
+  if (cartMode && qty) {
+    const inCart = cartCount(key);
+    const full = inCart >= qty;
+    controls = `<div class="stockline">${qty} in stock${inCart ? ` · <span class="incart">${inCart} in cart</span>` : ''}</div>
+      <button class="primary addcart" data-act="cart" ${full ? 'disabled' : ''}>${full ? 'All in cart' : 'Add to cart'}</button>`;
+  } else {
+    controls = `${qty ? '' : '<div class="oostag">Out of stock</div>'}
+      <div class="qty"><button data-act="dec" aria-label="Remove one" ${qty ? '' : 'disabled'}>−</button><span class="n">${qty}</span><button data-act="inc" aria-label="Add one">+</button></div>`;
+  }
   return `<div class="tile ${qty ? '' : 'oos'}${busy}" data-key="${esc(key)}">
     <div class="imgwrap"><img loading="lazy" src="${esc(meta.img)}" alt="${esc(meta.name)}">${badge}</div>
     <div class="info">
       <div class="name">${esc(meta.name)}</div>
       <div class="sub">${esc(meta.setName)} · #${esc(meta.cn)}</div>
       ${priceHTML(t)}
-      ${qty ? '' : '<div class="oostag">Out of stock</div>'}
-      <div class="qty"><button data-act="dec" aria-label="Remove one" ${qty ? '' : 'disabled'}>−</button><span class="n">${qty}</span><button data-act="inc" aria-label="Add one">+</button></div>
+      ${controls}
     </div>
   </div>`;
 }
 
 function renderGrid(container, tiles) {
   tiles.forEach(t => S.tiles.set(t.key, t));
-  container.innerHTML = tiles.map(tileHTML).join('');
+  const cartMode = container.id === 'grid';
+  container.innerHTML = tiles.map(t => tileHTML(t, cartMode)).join('');
 }
 
 function refreshTile(key) {
   const t = S.tiles.get(key); if (!t) return;
   document.querySelectorAll(`.tile[data-key="${CSS.escape(key)}"]`).forEach(node => {
-    const tmp = document.createElement('div'); tmp.innerHTML = tileHTML(t);
+    const tmp = document.createElement('div'); tmp.innerHTML = tileHTML(t, !!node.closest('#grid'));
     node.replaceWith(tmp.firstElementChild);
   });
+}
+
+/* ---------- cart ---------- */
+const cartCount = key => S.cart.reduce((n, l) => n + (l.key === key ? l.qty : 0), 0);
+const lineTotal = l => (l.price || 0) * l.qty;
+const cartTotal = () => S.cart.reduce((n, l) => n + lineTotal(l), 0);
+const finLabel = f => (f === 'foil' ? ' (Foil)' : f === 'etched' ? ' (Etched)' : '');
+function saveCart() { ls.set('cart', JSON.stringify(S.cart)); }
+function saveSales() { ls.set('sales', JSON.stringify(S.sales.slice(0, 30))); }
+
+// The Card Kingdom price for this printing in the chosen condition, or null when there isn't one.
+function priceFor(t, cond) {
+  const m = S.ck && ckMatch(t.meta, t.finish);
+  if (!m || !m.instock) return null;
+  const p = m.p[CONDS.indexOf(cond)];
+  return p > 0 ? p : null;
+}
+
+function addToCart(key) {
+  const t = S.tiles.get(key); if (!t) return;
+  const stock = qtyOf(key);
+  if (cartCount(key) >= stock) { toast(`All ${stock} in stock are already in the cart`); return; }
+  const cond = S.cond.get(key) || 'nm';
+  const lk = key + '|' + cond;
+  const line = S.cart.find(l => l.lk === lk);
+  if (line) line.qty++;
+  else S.cart.push({ lk, key, id: t.meta.id, finish: t.finish, cond, name: t.meta.name, set: t.meta.set, setName: t.meta.setName, cn: t.meta.cn, price: priceFor(t, cond), qty: 1 });
+  saveCart(); renderCart(); refreshTile(key);
+  const l = S.cart.find(x => x.lk === lk);
+  if (l.price == null) toast(`${t.meta.name} has no Card Kingdom price. Type a price in the cart.`);
+}
+
+function cartAct(lk, act) {
+  const i = S.cart.findIndex(l => l.lk === lk); if (i < 0) return;
+  const l = S.cart[i];
+  if (act === 'inc') { if (cartCount(l.key) >= qtyOf(l.key)) { toast(`Only ${qtyOf(l.key)} in stock`); return; } l.qty++; }
+  else if (act === 'dec') { l.qty--; if (l.qty <= 0) S.cart.splice(i, 1); }
+  else if (act === 'rm') S.cart.splice(i, 1);
+  saveCart(); renderCart(); refreshTile(l.key);
+}
+
+function renderCart() {
+  const box = $('#cart'); if (!box) return;
+  const n = S.cart.reduce((a, l) => a + l.qty, 0);
+  let h = `<h2><span>Cart${n ? ` · ${n} card${n === 1 ? '' : 's'}` : ''}</span>${S.cart.length ? '<button data-cact="clear" title="Empty the cart without changing inventory">Clear</button>' : ''}</h2>`;
+  if (!S.cart.length) h += '<p class="muted" style="margin:4px 0 8px">Empty. Search a card and press Add to cart.</p>';
+  for (const l of S.cart) {
+    const stock = qtyOf(l.key);
+    h += `<div class="cline" data-lk="${esc(l.lk)}">
+      <div class="top"><div><div class="name">${esc(l.name)}${finLabel(l.finish)}</div><div class="sub">${esc(l.setName)} · #${esc(l.cn)} · ${CONDLABEL[l.cond]}</div></div>
+        <button class="rm" data-cact="rm" title="Remove from cart" aria-label="Remove from cart">×</button></div>
+      <div class="ctl"><button data-cact="dec" aria-label="One fewer">−</button><span class="n">${l.qty}</span><button data-cact="inc" aria-label="One more">+</button>
+        <span class="muted">×</span> $<input class="pr" type="text" inputmode="decimal" value="${l.price == null ? '' : l.price.toFixed(2)}" placeholder="price" aria-label="Price each">
+        <span class="lt">${money(lineTotal(l))}</span></div>
+      ${l.price == null ? '<div class="warn">No Card Kingdom price. Type one in.</div>' : ''}
+      ${S.loaded && l.qty > stock ? `<div class="warn">Only ${stock} in stock now</div>` : ''}
+    </div>`;
+  }
+  h += `<div class="total"><span>Total</span><span id="carttotal">${money(cartTotal())}</span></div>`;
+  h += `<button class="primary sell" data-cact="sell" ${S.cart.length && !S.selling ? '' : 'disabled'}>${S.selling ? 'Saving sale…' : 'Complete sale and remove from inventory'}</button>`;
+  h += receiptsHTML();
+  box.innerHTML = h;
+}
+
+function saleHTML(s) {
+  const when = new Date(s.time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const items = s.lines.map(l => `<li><span>${l.sold} × ${esc(l.name)}${finLabel(l.finish)} <span class="muted">${esc(l.set.toUpperCase())} #${esc(l.cn)} ${CONDLABEL[l.cond]}</span>${l.sold < l.qty ? `<br><span class="short">Only ${l.sold} of ${l.qty} were in stock</span>` : ''}</span><span>${money(l.price * l.sold)}</span></li>`).join('');
+  return { when, items };
+}
+function receiptsHTML() {
+  if (!S.sales.length) return '';
+  const [last, ...older] = S.sales;
+  const r = saleHTML(last);
+  let h = `<div class="receipt" aria-live="polite"><div class="rhead">Last sale #${esc(last.order)} · ${esc(r.when)} · ${esc(last.who)}</div>
+    <div class="rtotal">${money(last.total)}</div><ul>${r.items}</ul>
+    <div class="rhead" style="margin-top:6px">${last.count} card${last.count === 1 ? '' : 's'} removed from inventory</div></div>`;
+  if (older.length) {
+    h += `<details class="sales"><summary>Earlier sales on this computer (${older.length})</summary>` +
+      older.map(s => { const o = saleHTML(s); return `<details class="sale"><summary><span>#${esc(s.order)} · ${esc(o.when)}</span><b>${money(s.total)}</b></summary><ul style="list-style:none;padding:0;margin:4px 0 0;font-size:14px">${o.items}</ul></details>`; }).join('') +
+      '</details>';
+  }
+  return h;
+}
+
+function orderNo() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}-${Math.random().toString(36).slice(2, 4).toUpperCase()}`;
+}
+
+async function completeSale() {
+  if (S.selling || !S.cart.length) return;
+  if (!S.who) { toast('Enter your name (top right) first so the sale is logged'); $('#who').focus(); return; }
+  if (!S.loaded) { toast('The inventory has not loaded yet'); return; }
+  const missing = S.cart.find(l => l.price == null);
+  if (missing) { toast(`Type a price for ${missing.name} first`); const el = document.querySelector(`.cline[data-lk="${CSS.escape(missing.lk)}"] input.pr`); if (el) el.focus(); return; }
+  const cart = S.cart.map(l => ({ ...l }));
+  const order = orderNo();
+  S.selling = true; renderCart();
+  let j;
+  try {
+    j = await api('sell', { order, who: S.who, rows: cart.map(l => ({ id: l.id, finish: l.finish, qty: l.qty, meta: { name: l.name, set: l.set, setName: l.setName, cn: l.cn } })) });
+  } catch (e) {
+    S.selling = false; renderCart();
+    toast('Sale NOT saved: ' + e.message.replace(/\.$/, '') + '. The cart is unchanged. Check History before trying again.');
+    return;
+  }
+  // Share what the server actually removed across this card's cart lines, in cart order.
+  const left = new Map(j.items.map(it => [it.key, it.sold]));
+  const lines = cart.map(l => { const s = Math.min(l.qty, left.get(l.key) || 0); left.set(l.key, (left.get(l.key) || 0) - s); return { ...l, sold: s }; });
+  for (const it of j.items) {
+    const l = cart.find(x => x.key === it.key);
+    setLocalQty(it.key, it.qty, { name: l.name, set: l.set, setName: l.setName, cn: l.cn });
+  }
+  const sale = { order, time: new Date().toISOString(), who: S.who, lines, total: lines.reduce((n, l) => n + l.price * l.sold, 0), count: lines.reduce((n, l) => n + l.sold, 0) };
+  S.sales.unshift(sale); saveSales();
+  S.cart = []; saveCart();
+  S.selling = false;
+  renderCart();
+  cart.forEach(l => refreshTile(l.key));
+  updateStockCount();
+  const short = lines.some(l => l.sold < l.qty);
+  toast(`Sale #${order} done: ${money(sale.total)}${short ? '. Some cards were no longer in stock, see the receipt.' : ''}`);
+}
+
+function onCartClick(e) {
+  const b = e.target.closest('[data-cact]'); if (!b) return;
+  const act = b.dataset.cact;
+  if (act === 'sell') return completeSale();
+  if (act === 'clear') {
+    if (!confirm('Empty the cart? Nothing is removed from inventory.')) return;
+    const keys = S.cart.map(l => l.key); S.cart = []; saveCart(); renderCart(); keys.forEach(refreshTile); return;
+  }
+  cartAct(b.closest('.cline').dataset.lk, act);
+}
+function onCartInput(e) {
+  if (!e.target.matches('input.pr')) return;
+  const row = e.target.closest('.cline');
+  const l = S.cart.find(x => x.lk === row.dataset.lk); if (!l) return;
+  const v = parseFloat(e.target.value.replace(/[$,\s]/g, ''));
+  l.price = Number.isFinite(v) && v >= 0 ? Math.round(v * 100) / 100 : null;
+  saveCart();
+  row.querySelector('.lt').textContent = money(lineTotal(l));
+  $('#carttotal').textContent = money(cartTotal());
 }
 
 /* ---------- inventory changes ---------- */
@@ -474,7 +672,8 @@ function onTileClick(e) {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const key = b.closest('.tile').dataset.key;
   const act = b.dataset.act;
-  if (act === 'inc') changeQty(key, 1);
+  if (act === 'cart') addToCart(key);
+  else if (act === 'inc') changeQty(key, 1);
   else if (act === 'dec') changeQty(key, -1);
   else if (act === 'cond') { S.cond.set(key, b.dataset.c); refreshTile(key); }
 }
@@ -482,6 +681,12 @@ function onTileClick(e) {
 async function init() {
   S.who = ls.get('who');
   $('#who').value = S.who;
+  try { S.cart = JSON.parse(ls.get('cart') || '[]'); } catch (e) { S.cart = []; }
+  try { S.sales = JSON.parse(ls.get('sales') || '[]'); } catch (e) { S.sales = []; }
+  renderCart();
+  $('#cart').addEventListener('click', onCartClick);
+  $('#cart').addEventListener('input', onCartInput);
+  $('#cart').addEventListener('change', e => { if (e.target.matches('input.pr')) renderCart(); });
   $('#who').addEventListener('change', e => { S.who = e.target.value.trim(); ls.set('who', S.who); });
   document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
   $('#go').addEventListener('click', doSearch);
