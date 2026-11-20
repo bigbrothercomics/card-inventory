@@ -53,7 +53,7 @@ var ACTIONS = {
     return { ok: true, seq: lastSeq_(s.log), rows: rows };
   },
 
-  // Changes made since log number `since` (by anyone), oldest first.
+  // Changes made since log number since (by anyone), oldest first.
   changes: function (b) {
     var s = sheets_();
     var last = lastSeq_(s.log);
@@ -113,6 +113,38 @@ var ACTIONS = {
       if (data.length) s.inv.getRange(2, 1, data.length, INV_HEAD.length).setValues(data);
       if (logs.length) s.log.getRange(s.log.getLastRow() + 1, 1, logs.length, LOG_HEAD.length).setValues(logs);
       return { ok: true, changed: changed, seq: seq };
+    });
+  },
+
+  // Complete a sale: remove every cart line from stock in one step. Lines asking for more than is in
+  // stock remove what is there; the reply says how many of each were actually removed.
+  sell: function (b) {
+    var who = clean_(b.who, 60);
+    if (!who) throw new Error('Enter your name first');
+    var order = clean_(b.order, 24);
+    var merged = {}, list = [];
+    (b.rows || []).slice(0, 500).forEach(function (r) {
+      var it = item_(r), q = Math.max(0, Math.round(Number(r.qty) || 0));
+      if (!q) return;
+      if (merged[it.key]) merged[it.key].qty += q; else { it.qty = q; merged[it.key] = it; list.push(it); }
+    });
+    if (!list.length) throw new Error('The cart is empty');
+    var action = 'Sold' + (order ? ' #' + order : '');
+    return withLock_(function (s) {
+      var now = new Date(), seq = lastSeq_(s.log), logs = [], items = [];
+      list.forEach(function (it) {
+        var row = findRow_(s.inv, it.key);
+        var old = row ? s.inv.getRange(row, 1, 1, INV_HEAD.length).getValues()[0] : null;
+        var cur = old ? Number(old[3]) || 0 : 0;
+        var take = Math.min(cur, it.qty);
+        items.push({ key: it.key, asked: it.qty, sold: take, qty: cur - take });
+        if (!take) return;
+        keep_(it, old);
+        s.inv.getRange(row, 1, 1, INV_HEAD.length).setValues([[it.key, it.id, it.finish, cur - take, it.name, it.set, it.setName, it.cn, now, who]]);
+        logs.push([++seq, now, who, action, it.key, it.name, it.set, it.setName, it.cn, it.finish, -take, cur - take]);
+      });
+      if (logs.length) s.log.getRange(s.log.getLastRow() + 1, 1, logs.length, LOG_HEAD.length).setValues(logs);
+      return { ok: true, seq: seq, items: items };
     });
   },
 
