@@ -154,3 +154,28 @@ a.back{color:var(--accent);font-size:14px}
 .ord .obody ul{list-style:none;margin:8px 0;padding:0;font-size:14px}
 .ord .obody li{display:flex;justify-content:space-between;gap:10px;padding:2px 0}
 .ord .obody .row{justify-content:flex-end}
+/* past orders as receipt cards (same look as the old Sales tab), on both screens */
+.receipt .otag{font-size:12px;font-weight:650;border-radius:99px;padding:2px 8px;background:#fff;color:var(--accent-dark);border:1px solid var(--accent-soft);vertical-align:2px;margin-left:6px}
+.receipt .otag.email{background:#eef3ff;color:#2b4fb3;border-color:#dfe7fb}
+.receipt .rfoot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.receipt .rfoot button{font-size:13px;padding:5px 10px}
+.receipt .rnoprice{font-size:15px;font-weight:500;color:var(--muted)}
+.salelist .receipt.rev{background:#f6f5f2;opacity:.7}
+.receipt .revtag{font-size:12px;font-weight:650;color:#555;background:#ececec;border-radius:99px;padding:2px 8px}
+/* switch between the sales screen and the back office */
+a.btn.switch{display:inline-flex;align-items:center;gap:6px;text-decoration:none;font-weight:650;color:var(--accent-dark);border-color:var(--accent);background:var(--accent-soft);font-size:14px;padding:6px 12px}
+a.btn.switch:hover{background:var(--accent);color:#fff}
+/* sales screen: ⋯ menu on each card */
+.stockline{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.tmenu{padding:0 7px;line-height:20px;font-size:16px;font-weight:700;color:var(--muted);border-radius:7px;min-width:28px}
+.tmenu:hover{border-color:var(--accent);color:var(--accent)}
+#tilemenu{position:fixed;z-index:40;display:flex;flex-direction:column;min-width:200px;padding:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+#tilemenu button{border:none;text-align:left;padding:9px 12px;border-radius:7px;background:none}
+#tilemenu button:hover:not(:disabled),#tilemenu button:focus-visible{background:var(--accent-soft);color:var(--accent-dark)}
+#tilemenu button:disabled{opacity:.45;cursor:default}
+/* green notices, bottom right */
+#notices{position:fixed;right:16px;bottom:16px;z-index:60;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
+.notice{display:flex;align-items:center;gap:8px;max-width:min(360px,calc(100vw - 32px));padding:10px 14px;border-radius:10px;background:#1f8a3b;color:#fff;font-weight:600;font-size:14px;box-shadow:0 6px 18px rgba(0,0,0,.2);transform:translateX(calc(100% + 24px));opacity:0;transition:transform .3s ease,opacity .3s ease}
+.notice.in{transform:none;opacity:1}
+.notice .ck{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.22);font-size:13px}
+@media (prefers-reduced-motion:reduce){.notice{transition:opacity .2s;transform:none}}

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>All Seeing Inventory</title>
 <link rel="icon" href="logo.png">
-<link rel="stylesheet" href="app.css?v=14">
+<link rel="stylesheet" href="app.css?v=15">
 </head>
 <body data-mode="sell">
 <header>
@@ -13,9 +13,11 @@
     <h1 class="brand"><img src="logo.png" alt="">All Seeing Inventory</h1>
     <div class="tabs row" style="gap:4px">
       <button data-tab="sell" class="on">Sell</button>
-      <button data-tab="sales">Sales</button>
+      <button data-tab="email">Email orders</button>
+      <button data-tab="orders">Past orders</button>
     </div>
     <span class="spacer"></span>
+    <a class="btn switch" href="admin.html">Switch to backend</a>
     <span class="status" id="sync"></span>
     <input type="text" id="who" placeholder="Your name" size="14" aria-label="Your name">
   </div>
@@ -38,14 +40,50 @@
     </div>
   </section>
 
-  <section id="v-sales" hidden>
-    <div class="salesum" id="salesum"></div>
-    <div class="salelist" id="saleslist"></div>
+
+  <section id="v-email" hidden>
+    <div class="eform">
+      <label>Customer name<input type="text" id="ecust" placeholder="e.g. Jane Doe" size="22"></label>
+      <label>Per-card budget $<input type="text" id="ecard" inputmode="decimal" placeholder="none" size="7"></label>
+      <label>Overall budget $<input type="text" id="etotal" inputmode="decimal" placeholder="none" size="7"></label>
+      <label class="chk"><input type="checkbox" id="efoil"> Foils OK</label>
+      <label class="grow">Notes<input type="text" id="enotes" placeholder="Anything else from their checklist"></label>
+    </div>
+    <textarea id="elist" rows="6" placeholder="Paste the card list from the email, one card per line (4 Lightning Bolt, 4x Lightning Bolt, Lightning Bolt x4 all work). Order details can go anywhere in the list and fill in the boxes above: name: Jane Doe · budget: $50 · per card budget: $5 · no foils"></textarea>
+    <div class="row" style="margin:8px 0">
+      <button id="echeck" class="primary">Check list</button>
+      <button id="enew" title="Clear the list, the order details and the table">Clear</button>
+      <button id="elastpdf" hidden>Download last PDF</button>
+      <span class="note" id="enote" style="margin:0"></span>
+    </div>
+    <div class="legend"><span><i class="sw orange"></i>Orange: over budget</span><span><i class="sw red"></i>Red: out of stock</span><span class="muted">Tick a card to price it. Ticked cards are removed from inventory when you complete the order.</span></div>
+    <div class="etabwrap" id="etable"></div>
+    <div class="efoot" id="efoot"></div>
+  </section>
+
+  <section id="v-orders" hidden>
+    <div class="eform">
+      <label>From<input type="date" id="ofrom"></label>
+      <label>To<input type="date" id="oto"></label>
+      <label>Customer, staff or order #<input type="search" id="oq" placeholder="e.g. Jane, #12" size="18"></label>
+      <label>Total at least $<input type="text" id="omin" inputmode="decimal" placeholder="any" size="6"></label>
+      <label>Total at most $<input type="text" id="omax" inputmode="decimal" placeholder="any" size="6"></label>
+      <label class="chk"><input type="checkbox" id="oshowrev" checked> Show reversed</label>
+      <button id="ogo" class="primary">Search</button>
+    </div>
+    <div class="row" style="gap:6px;margin:-2px 0 8px">
+      <span class="muted">Quick:</span>
+      <button data-range="today">Today</button><button data-range="yesterday">Yesterday</button><button data-range="7">Last 7 days</button><button data-range="30">Last 30 days</button><button data-range="all">All time</button>
+    </div>
+    <p class="note" id="onote"></p>
+    <div class="salesum" id="osum"></div>
+    <div class="salelist" id="olist"></div>
   </section>
 </main>
+<div id="emodal" class="modal" hidden></div>
 <div id="toast"></div>
 
 <script src="config.js"></script>
-<script src="app.js?v=14"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

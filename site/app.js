@@ -96,7 +96,7 @@ function applyChanges(list) {
   touched.forEach(refreshTile);
   if (MODE === 'admin' && currentTab() === 'stock') updateStockCount();
   // Email orders follow live stock, but not while someone is typing in the table.
-  if (MODE === 'admin' && currentTab() === 'email' && !(document.activeElement || document.body).closest('#etable')) renderEmail();
+  if (currentTab() === 'email' && !(document.activeElement || document.body).closest('#etable')) renderEmail();
   if (MODE === 'sell') {
     // A card someone else just put in stock isn't on screen yet; redraw the list so it shows up.
     const missing = [...touched].some(k => qtyOf(k) > 0 && !document.querySelector(`#grid .tile[data-key="${CSS.escape(k)}"]`));
@@ -218,9 +218,11 @@ function tileHTML(t, cartMode) {
     const action = line
       ? `<div class="qty cartstep"><button data-act="cdec" aria-label="One fewer in the order">−</button><span class="n">${line.qty}</span><button data-act="cinc" aria-label="One more in the order" ${full ? 'disabled' : ''}>+</button><span class="muted">in order</span></div>`
       : `<button class="primary addcart" data-act="cart" ${full ? 'disabled' : ''}>${full ? 'All in order' : 'Add to order'}</button>`;
+    // ⋯ opens a small menu to add or remove one copy from inventory without going to the back office.
+    const menu = `<button class="tmenu" data-act="menu" title="Inventory options" aria-label="Inventory options for ${esc(meta.name)}" aria-haspopup="menu">⋯</button>`;
     controls = qty
-      ? `<div class="stockline">${qty} in stock${inCart ? ` · <span class="incart">${inCart} in order</span>` : ''}</div>${action}`
-      : `<div class="oostag">Sold out${inCart ? ` · ${inCart} in order` : ''}</div>`;
+      ? `<div class="stockline"><span>${qty} in stock${inCart ? ` · <span class="incart">${inCart} in order</span>` : ''}</span>${menu}</div>${action}`
+      : `<div class="stockline"><span class="oostag">Sold out${inCart ? ` · ${inCart} in order` : ''}</span>${menu}</div>`;
   } else {
     controls = `${qty ? '' : '<div class="oostag">Out of stock</div>'}
       <div class="qty"><button data-act="dec" aria-label="Remove one" ${qty ? '' : 'disabled'}>−</button><span class="n">${qty}</span><button data-act="inc" aria-label="Add one">+</button></div>`;
@@ -254,6 +256,7 @@ function onTileClick(e) {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const key = b.closest('.tile').dataset.key;
   const act = b.dataset.act;
+  if (act === 'menu') return openTileMenu(key, b);
   if (act === 'cart') addToCart(key);
   else if (act === 'cinc' || act === 'cdec') cartAct(S.active, act === 'cinc' ? 'inc' : 'dec');
   else if (act === 'inc') changeQty(key, 1);
@@ -265,21 +268,56 @@ function onTileClick(e) {
   }
 }
 
+/* ---------- sales screen: one-copy inventory menu + slide-in notices ---------- */
+function openTileMenu(key, btn) {
+  closeTileMenu();
+  const t = S.tiles.get(key); if (!t) return;
+  const qty = qtyOf(key);
+  const m = document.createElement('div');
+  m.id = 'tilemenu'; m.setAttribute('role', 'menu'); m.dataset.key = key;
+  m.innerHTML = `<button role="menuitem" data-tm="add">Add 1 to inventory</button>
+    <button role="menuitem" data-tm="remove" ${qty ? '' : 'disabled'}>Remove 1 from inventory</button>`;
+  m.addEventListener('click', onTileMenuClick);
+  document.body.appendChild(m);
+  const r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + 'px';
+  m.style.top = (r.bottom + h + 8 > window.innerHeight ? r.top - h - 4 : r.bottom + 4) + 'px';
+  m.querySelector('button:not([disabled])').focus();
+}
+function closeTileMenu() { const m = $('#tilemenu'); if (m) m.remove(); }
+async function onTileMenuClick(e) {
+  const b = e.target.closest('[data-tm]'); if (!b) return;
+  const key = e.currentTarget.dataset.key, t = S.tiles.get(key), add = b.dataset.tm === 'add';
+  closeTileMenu();
+  if (!t) return;
+  if (await changeQty(key, add ? 1 : -1)) notify(`${t.meta.name}${finLabel(t.finish)} ${add ? 'added' : 'removed'}`);
+}
+
+// Green notice that slides in at the bottom right and leaves after 3 seconds.
+function notify(text) {
+  let box = $('#notices');
+  if (!box) { box = document.createElement('div'); box.id = 'notices'; box.setAttribute('aria-live', 'polite'); document.body.appendChild(box); }
+  const n = document.createElement('div');
+  n.className = 'notice'; n.innerHTML = `<span class="ck" aria-hidden="true">✓</span>${esc(text)}`;
+  box.appendChild(n);
+  requestAnimationFrame(() => n.classList.add('in'));
+  setTimeout(() => { n.classList.remove('in'); setTimeout(() => n.remove(), 350); }, 3000);
+}
+
 /* ---------- tabs ---------- */
-const VIEWS = { sell: ['sell', 'sales'], admin: ['add', 'stock', 'missing', 'email', 'orders', 'history'] }[MODE];
+const VIEWS = { sell: ['sell', 'email', 'orders'], admin: ['add', 'stock', 'missing', 'orders', 'history'] }[MODE];
 function setTab(tab) {
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   VIEWS.forEach(t => { $('#v-' + t).hidden = t !== tab; });
   renderAll();
   if (tab === 'history') renderHistory();
   if (tab === 'missing') loadMissing();
-  if (tab === 'orders' && !S.ordersLoaded) { setOrderRange('7'); loadOrders(); }
+  if (tab === 'orders') { if (!S.ordersLoaded) setOrderRange('today'); loadOrders(); }   // fresh every time it's opened
 }
 function currentTab() { return (document.querySelector('.tabs button.on') || {}).dataset.tab; }
 function renderAll() {
   const t = currentTab();
   if (t === 'sell') renderSell();
-  else if (t === 'sales') renderSales();
   else if (t === 'add') renderSearch();
   else if (t === 'stock') renderStock();
   else if (t === 'missing') renderMissing();
@@ -376,7 +414,7 @@ function receiptHTML(s, isLast) {
     <div class="rhead">${esc(when)} · ${esc(s.who)}</div>
     <div class="rtotal">${money(s.total)}</div><ul>${items}</ul>
     <div class="rhead" style="margin-top:6px">${s.count} card${s.count === 1 ? '' : 's'} removed from inventory</div>
-    ${isLast ? '<div class="more"><a data-cact="sales">See all sales</a></div>' : ''}
+    ${isLast ? '<div class="more"><a data-cact="sales">See all orders</a></div>' : ''}
   </div>`;
 }
 
@@ -421,7 +459,7 @@ function onCartClick(e) {
   const b = e.target.closest('[data-cact]'); if (!b) return;
   const act = b.dataset.cact;
   if (act === 'sell') return completeSale();
-  if (act === 'sales') return setTab('sales');
+  if (act === 'sales') return setTab('orders');
   if (act === 'clear') {
     if (!confirm('Clear the current order? Nothing is removed from inventory.')) return;
     const keys = S.cart.map(l => l.key); S.cart = []; S.active = null; saveCart(); renderCart(); keys.forEach(refreshTile); return;
@@ -456,12 +494,12 @@ function renderSales() {
    ===================================================================== */
 // The number changes on screen immediately; the save runs in the background and the server's answer is final.
 async function changeQty(key, delta) {
-  if (!S.who) { toast('Enter your name (top right) first so changes are logged'); $('#who').focus(); return; }
-  if (!S.loaded) { toast('The inventory has not loaded yet'); return; }
-  const t = S.tiles.get(key); if (!t) return;
+  if (!S.who) { toast('Enter your name (top right) first so changes are logged'); $('#who').focus(); return false; }
+  if (!S.loaded) { toast('The inventory has not loaded yet'); return false; }
+  const t = S.tiles.get(key); if (!t) return false;
   const before = qtyOf(key);
   const after = Math.max(0, before + delta);
-  if (after === before) return;
+  if (after === before) return false;
   const info = { name: t.meta.name, set: t.meta.set, setName: t.meta.setName, cn: t.meta.cn };
   setLocalQty(key, after, info);
   S.pending.set(key, (S.pending.get(key) || 0) + 1);
@@ -469,9 +507,11 @@ async function changeQty(key, delta) {
   try {
     const j = await api('adjust', { id: t.meta.id, finish: t.finish, delta, who: S.who, meta: info });
     if (S.pending.get(key) === 1) setLocalQty(key, j.qty, info);   // last save for this card: take the server's count
+    return true;
   } catch (e) {
     setLocalQty(key, Math.max(0, qtyOf(key) - delta), info);
     toast('Not saved: ' + e.message);
+    return false;
   } finally {
     const n = S.pending.get(key) - 1; if (n > 0) S.pending.set(key, n); else S.pending.delete(key);
     refreshTile(key); updateStockCount();
@@ -1090,26 +1130,30 @@ function renderOrders() {
   const when = s => new Date(s).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   const live = list.filter(o => !o.reversed);
   const sum = live.reduce((n, o) => n + (o.total || 0), 0), cards = live.reduce((n, o) => n + o.cards, 0);
-  $('#onote').textContent = !list.length ? 'No orders match.' :
-    `${list.length} order${list.length === 1 ? '' : 's'}` + (S.ordersCount > S.orders.length ? ` (showing the newest ${S.orders.length} of ${S.ordersCount})` : '') +
-    ` · ${cards} card${cards === 1 ? '' : 's'} · ${money(sum)} not counting reversed orders` + (live.some(o => o.total == null) ? ' (some older orders have no price recorded)' : '') + '.';
+  const pl = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  // Summary line in the same style as the old Sales tab: big total, then counts.
+  $('#onote').textContent = !list.length ? 'No orders match.' : (S.ordersCount > S.orders.length ? `Showing the newest ${S.orders.length} of ${S.ordersCount} orders. Narrow the dates to see older ones.` : '');
+  $('#osum').innerHTML = !list.length ? '' : `<span>Total: <b>${money(sum)}</b></span>
+    <span class="muted">${pl(live.length, 'order')}, ${pl(cards, 'card')}</span>
+    ${list.length > live.length ? `<span class="muted">${list.length - live.length} reversed (not counted)</span>` : ''}
+    ${live.some(o => o.total == null) ? '<span class="muted">Some older orders have no price recorded.</span>' : ''}`;
+  // Each order as a receipt card, like the Sales tab: number, when and who, big total, its cards, then Reverse.
   $('#olist').innerHTML = list.map(o => {
     const items = o.items.map(x => `<li><span>${x[1]} × ${esc(x[3] || 'Card')}${finLabel(String(x[0]).split('|')[1])} <span class="muted">${esc(String(x[4] || '').toUpperCase())}${x[6] ? ' #' + esc(x[6]) : ''}</span></span><span>${x[2] != null ? money(x[2] * x[1]) : ''}</span></li>`).join('');
-    return `<details class="ord${o.reversed ? ' rev' : ''}" data-order="${esc(o.order)}">
-      <summary><span class="onum">#${esc(o.order)}</span><span>${esc(when(o.time))}</span>
-        ${o.customer ? `<span class="otag email">Email: ${esc(o.customer)}</span>` : '<span class="otag">In store</span>'}
-        <span class="muted">by ${esc(o.who)} · ${o.cards} card${o.cards === 1 ? '' : 's'}</span>
-        ${o.reversed ? `<span class="otag done">Reversed ${esc(when(o.reversed))} by ${esc(o.reversedBy)}</span>` : ''}
-        <span class="otot">${o.total != null ? money(o.total) : '<span class="muted" style="font-size:13px;font-weight:500">no price recorded</span>'}</span></summary>
-      <div class="obody"><ul>${items}</ul>
-        <div class="row">${o.reversed ? '<span class="muted">These cards were already put back into stock.</span>' : `<button data-oact="reverse">Reverse order: put these ${o.cards} card${o.cards === 1 ? '' : 's'} back in stock</button>`}</div></div>
-    </details>`;
+    return `<div class="receipt${o.reversed ? ' rev' : ''}" data-order="${esc(o.order)}">
+      <div class="rorder">Order #${esc(o.order)}${o.customer ? `<span class="otag email">Email: ${esc(o.customer)}</span>` : '<span class="otag">In store</span>'}</div>
+      <div class="rhead">${esc(when(o.time))} · ${esc(o.who)}</div>
+      <div class="rtotal">${o.total != null ? money(o.total) : '<span class="rnoprice">No price recorded</span>'}</div>
+      <ul>${items}</ul>
+      <div class="rfoot"><span class="rhead">${pl(o.cards, 'card')} ${o.reversed ? 'put back in stock' : 'removed from inventory'}</span>
+        ${o.reversed ? `<span class="revtag">Reversed ${esc(when(o.reversed))} by ${esc(o.reversedBy)}</span>` : '<button data-oact="reverse" title="Put every card in this order back into inventory">Reverse order</button>'}</div>
+    </div>`;
   }).join('');
 }
 
 async function onOrdersClick(e) {
   const b = e.target.closest('[data-oact]'); if (!b) return;
-  const order = b.closest('.ord').dataset.order;
+  const order = b.closest('[data-order]').dataset.order;
   const o = (S.orders || []).find(x => String(x.order) === order); if (!o) return;
   if (!S.who) { toast('Enter your name (top right) first so the reversal is logged'); $('#who').focus(); return; }
   if (!confirm(`Reverse order #${order}${o.customer ? ' for ' + o.customer : ''}${o.total != null ? ' (' + money(o.total) + ')' : ''}?\n\nThis puts ${o.cards} card${o.cards === 1 ? '' : 's'} back into inventory. It can't be undone from here.`)) return;
@@ -1192,6 +1236,9 @@ async function init() {
     $('#q').addEventListener('input', debounce(renderSell, 120));
     $('#q').addEventListener('keydown', e => { if (e.key === 'Escape') { e.target.value = ''; renderSell(); } });
     $('#grid').addEventListener('click', onTileClick);
+    document.addEventListener('click', e => { if (!e.target.closest('#tilemenu, .tmenu')) closeTileMenu(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTileMenu(); });
+    window.addEventListener('scroll', closeTileMenu, { passive: true });
     $('#cart').addEventListener('click', onCartClick);
     $('#cart').addEventListener('input', onCartInput);
     $('#cart').addEventListener('change', e => { if (e.target.matches('input.pr')) renderCart(); });
@@ -1206,20 +1253,25 @@ async function init() {
     $('#mq').addEventListener('keydown', e => { if (e.key === 'Enter') addMissingByName(); });
     $('#mf').addEventListener('input', debounce(renderMissing, 120));
     $('#missgrid').addEventListener('click', onMissingClick);
+    $('#export').addEventListener('click', exportCSV);
+    $('#importfile').addEventListener('change', async e => {
+      const f = e.target.files[0]; if (!f) return;
+      try { await importCSV(await f.text(), f.name); } catch (x) { toast('Import failed: ' + x.message); }
+      e.target.value = '';
+    });
+  }
+  // Email orders (sales screen) and Past orders (both screens) are wired up wherever their sections exist.
+  if ($("#v-email")) {
     try { S.email = { ...emailBlank(), ...JSON.parse(ls.get('emaildraft') || '{}') }; } catch (e) { S.email = emailBlank(); }
     emailFormOut();
     $('#echeck').addEventListener('click', checkEmailList);
+    // Clear: empties the order details, the pasted list and the table, after a confirm. Nothing changes in inventory.
     $('#enew').addEventListener('click', () => {
-      if (S.email.lines.length && !confirm('Clear this email order and start a new one? Nothing is removed from inventory.')) return;
+      if (!confirm('Clear this email order? The customer details, the pasted list and the table will be emptied. Nothing is removed from inventory.')) return;
       S.email = emailBlank(); saveEmail(); emailFormOut(); renderEmail(); $('#enote').textContent = '';
+      toast('Email order cleared');
     });
     $('#elastpdf').addEventListener('click', downloadEmailPdf);
-    $('#ogo').addEventListener('click', loadOrders);
-    ['#oq', '#omin', '#omax'].forEach(s => $(s).addEventListener('keydown', e => { if (e.key === 'Enter') loadOrders(); }));
-    ['#ofrom', '#oto'].forEach(s => $(s).addEventListener('change', loadOrders));
-    $('#oshowrev').addEventListener('change', renderOrders);
-    document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { setOrderRange(b.dataset.range); loadOrders(); }));
-    $('#olist').addEventListener('click', onOrdersClick);
     // Budget and foil answers re-check the table straight away; the rest is just saved.
     ['#ecust', '#ecard', '#etotal', '#efoil', '#enotes', '#elist'].forEach(s => $(s).addEventListener('input', debounce(() => { emailFormIn(); saveEmail(); renderEmail(); }, 250)));
     $('#efoil').addEventListener('change', () => { emailFormIn(); saveEmail(); renderEmail(); });
@@ -1229,12 +1281,14 @@ async function init() {
       if (b && b.dataset.m === 'pdf') downloadEmailPdf();
       if ((b && b.dataset.m === 'close') || e.target.id === 'emodal') $('#emodal').hidden = true;
     });
-    $('#export').addEventListener('click', exportCSV);
-    $('#importfile').addEventListener('change', async e => {
-      const f = e.target.files[0]; if (!f) return;
-      try { await importCSV(await f.text(), f.name); } catch (x) { toast('Import failed: ' + x.message); }
-      e.target.value = '';
-    });
+  }
+  if ($("#v-orders")) {
+    $('#ogo').addEventListener('click', loadOrders);
+    ['#oq', '#omin', '#omax'].forEach(s => $(s).addEventListener('keydown', e => { if (e.key === 'Enter') loadOrders(); }));
+    ['#ofrom', '#oto'].forEach(s => $(s).addEventListener('change', loadOrders));
+    $('#oshowrev').addEventListener('change', renderOrders);
+    document.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => { setOrderRange(b.dataset.range); loadOrders(); }));
+    $('#olist').addEventListener('click', onOrdersClick);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   setInterval(poll, POLL_MS);
