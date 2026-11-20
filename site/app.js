@@ -642,7 +642,7 @@ function saveEmail() { ls.set('emaildraft', JSON.stringify(S.email)); }
 //   "no foils" · "foils: yes" · "foils ok" · "ck pricing: yes" · "notes: ships Friday"
 // Returns the details found and the remaining lines (the card list).
 function extractOrderInfo(text) {
-  const info = {}, rest = [];
+  const info = {}, rest = [], maybe = [];
   const YES = /\b(yes|y|ok|okay|fine|sure|allowed|include|including|incl|true|good|accept|accepted|please)\b/;
   const NO = /\b(no|n|not|none|without|exclude|excluding|false|nope|dont|don't|never)\b/;
   const amount = s => { const m = s.match(/\$\s*(\d+(?:\.\d{1,2})?)/) || s.match(/(\d+(?:\.\d{1,2})?)\s*(?:\$|dollars?|usd|bucks)/) || s.match(/(?:^|[\s:=])(\d+(?:\.\d{1,2})?)\s*$/) || s.match(/[:=]\s*(\d+(?:\.\d{1,2})?)/); return m ? m[1] : null; };
@@ -661,9 +661,11 @@ function extractOrderInfo(text) {
       info[per ? 'card' : 'total'] = amount(s);
       continue;
     }
+    // "name Jane Doe" (no colon) could be the customer or a card like Name Dropping; checkEmailList decides.
+    if (!cardish && (m = line.match(/^\s*(?:customer'?s?\s*name|customer|name)\s+(.+)$/i))) maybe.push({ raw, line, cust: m[1].trim() });
     rest.push(raw);
   }
-  return { info, rest: rest.join('\n') };
+  return { info, rest: rest.join('\n'), maybe };
 }
 
 // "4 Lightning Bolt", "4x Lightning Bolt", "Lightning Bolt x4", "1 Lightning Bolt (M11) 146", "- Lightning Bolt"
@@ -819,7 +821,20 @@ function emailFormOut() {
 // Scryfall's list of every card name (~1 MB) is downloaded once per page load.
 let cardNameList = null;
 const spell = s => fold(s).replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim();
-async function closestCardName(typed) {
+async function closestCardName(typed, maxEdits) {
+  await loadCardNames();
+  const t = spell(typed);
+  const limit = maxEdits != null ? maxEdits : Math.max(1, Math.min(4, Math.floor(t.length / 4)));   // ~1 slip per 4 letters, at most 4
+  return closestIn(t, limit);
+}
+// Is this line a real card (in stock, an exact card name, or one or two letters off one)?
+async function isCardName(s) {
+  if (stockIndex().has(norm(s))) return true;
+  await loadCardNames();
+  const t = spell(s);
+  return cardNameList.some(c => c.s === t) || !!closestIn(t, 2);
+}
+async function loadCardNames() {
   if (!cardNameList) {
     await throttle();
     const r = await fetch('https://api.scryfall.com/catalog/card-names', { headers: SF_HEADERS });
@@ -830,8 +845,8 @@ async function closestCardName(typed) {
       if (n.includes(' // ')) cardNameList.push({ n, s: spell(n.split(' // ')[0]) });
     }
   }
-  const t = spell(typed);
-  const limit = Math.max(1, Math.min(4, Math.floor(t.length / 4)));   // ~1 slip per 4 letters, at most 4
+}
+function closestIn(t, limit) {
   let ties = [], bestD = limit + 1;
   for (const c of cardNameList) {
     if (Math.abs(c.s.length - t.length) > bestD) continue;
@@ -900,7 +915,16 @@ async function resolveNames(lines) {
 async function checkEmailList() {
   emailFormIn();
   // Order details pasted with the list (name, budgets, foils…) fill in the boxes above; the rest is the card list.
-  const { info, rest } = extractOrderInfo(S.email.text);
+  let { info, rest, maybe } = extractOrderInfo(S.email.text);
+  // "name Jane Doe": the customer's name, unless that line is really a card ("Name Dropping").
+  // A "name: Jane" line elsewhere in the list wins; the other name lines are still kept out of the card list.
+  for (const x of maybe) {
+    let card = true;
+    try { card = await isCardName(x.line); } catch (e) { card = !!stockIndex().has(norm(x.line)); }
+    if (card) continue;
+    if (info.cust == null) info.cust = x.cust;
+    rest = rest.split('\n').filter(l => l !== x.raw).join('\n');
+  }
   const filled = [];
   if (info.cust != null) { $('#ecust').value = info.cust; filled.push('name'); }
   if (info.total != null) { $('#etotal').value = info.total; filled.push('overall budget'); }
