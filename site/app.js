@@ -1177,8 +1177,17 @@ function mailParse(m) {
   const { info, rest } = extractOrderInfo(text);
   const noBudget = /\b(no (budget|limit|max|maximum|spending limit)|unlimited|budget (is not|isn'?t) (an issue|a concern))\b/i.test(text);
   // When the list gives quantities ("2 Sol Ring", "Sol Ring x2"), only those lines are cards, so a sign-off like "Jane" isn't taken for one.
-  const sender = String(d.fromName || '').toLowerCase().split(/\s+/).filter(w => w.length > 1);
-  let cand = rest.split('\n').filter(looksLikeCard).filter(l => !sender.includes(l.trim().toLowerCase()));   // a sign-off with the sender's name isn't a card
+  // A signature ("Jordan", "- James") is not a card, whatever the sender's Gmail name says. Dropped: the 1-2 word line right after
+  // a closing ("Thanks,"), the last line when it stands alone after a blank line or starts with a dash, and any line that is the
+  // sender's or the stated customer's name. A real in-stock card name is never dropped.
+  const closing = /^(thanks|thank you|thx|ty|cheers|regards|kind regards|best regards|best|sincerely|many thanks|thanks so much|thank you so much|much appreciated|appreciate it|talk soon|take care|respectfully|have a good one|have a great day)[\s,.!-]*$/i;
+  const plain = s => /^[-–—~]*\s*[A-Za-z][A-Za-z'’.-]*(?:\s+[A-Za-z][A-Za-z'’.-]*)?[,.!]?$/.test(s.trim());
+  const rl = rest.split('\n'), sig = new Set(), idx = stockIndex();
+  let prev = -1, last = -1;
+  rl.forEach((l, i) => { const t = l.trim(); if (!t) return; if (prev >= 0 && closing.test(rl[prev].trim()) && plain(t)) sig.add(i); prev = i; last = i; });
+  if (last > 0 && plain(rl[last]) && (!rl[last - 1].trim() || /^[-–—~]/.test(rl[last].trim())) && rl.filter((l, i) => i !== last && looksLikeCard(l)).length >= 2) sig.add(last);   // (a one- or two-card list keeps its last line)
+  const names = new Set(`${d.fromName || ''} ${info.cust || ''}`.toLowerCase().split(/[\s,]+/).filter(w => w.length > 1));
+  let cand = rl.filter((l, i) => (!sig.has(i) || idx.has(norm(l))) && !names.has(l.trim().toLowerCase().replace(/^[-–—~\s]+|[,.!\s]+$/g, ''))).filter(looksLikeCard);
   const withQty = cand.filter(l => /^\s*[-*•]?\s*\d{1,3}\s*[x×]?\s+\S/.test(l) || /\S\s*[x×]\s*\d{1,3}\s*$/i.test(l));
   if (withQty.length) cand = withQty;
   const cards = parseWantList(cand.join('\n')).map(c => ({ qty: c.qty, name: c.name, set: c.set }));
