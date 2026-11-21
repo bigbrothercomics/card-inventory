@@ -214,7 +214,7 @@ var ACTIONS = {
   emails: function () { return emailsReply_(); },
 
   // Look at Gmail now: new/changed "lists" threads are read by the AI, finished ones leave the To do list.
-  emailSync: function () { syncEmails_(8); return emailsReply_(); },
+  emailSync: function () { syncEmails_(40); return emailsReply_(); },
 
   // Mark an email complete in the app (and put the Gmail "complete" label on it).
   emailDone: function (b) {
@@ -458,7 +458,7 @@ function emlRows_(sh) {
 
 function emailsReply_() {
   var props = PropertiesService.getScriptProperties();
-  var list = emlRows_(emlTab_()).filter(function (r) { return r.status === 'todo'; }).map(function (r) {
+  var list = emlRows_(emlTab_()).filter(function (r) { return r.status === 'todo'; }).map(function (r) {   // data.mode 'text' = free mode (no AI)
     var data = null, missing = [];
     try { data = JSON.parse(r.parsed || 'null'); } catch (e) {}
     try { missing = JSON.parse(r.missing || '[]'); } catch (e) {}
@@ -476,13 +476,23 @@ function customerMsgs_(t) {
   return t.getMessages().filter(function (m) { return !(me && m.getFrom().toLowerCase().indexOf(me) >= 0); });
 }
 
+// A message's own words: quoted earlier mail ("On ... wrote:", "> ...") removed.
+function cleanBody_(m) {
+  var body = String(m.getPlainBody() || '').replace(/\r/g, '');
+  body = body.replace(/\n\s*On [^\n]{5,200}\n?[^\n]{0,100}wrote:[\s\S]*$/, '').replace(/\n-{2,}\s*Original Message[\s\S]*$/i, '');
+  return body.split('\n').filter(function (l) { return l.charAt(0) !== '>'; }).join('\n').trim().slice(0, 8000);
+}
+
+// Free mode (no AI key): store the customer's own words; the app reads name/budget/foils/cards from them itself.
+function customerText_(t) {
+  return customerMsgs_(t).map(cleanBody_).join('\n\n').slice(0, 30000);
+}
+
 function threadText_(t) {
   var msgs = customerMsgs_(t), parts = [];
   msgs.forEach(function (m, i) {
     var from = m.getFrom(), mine = false;
-    var body = String(m.getPlainBody() || '').replace(/\r/g, '');
-    body = body.replace(/\n\s*On [^\n]{5,200}\n?[^\n]{0,100}wrote:[\s\S]*$/, '').replace(/\n-{2,}\s*Original Message[\s\S]*$/i, '');
-    body = body.split('\n').filter(function (l) { return l.charAt(0) !== '>'; }).join('\n').trim().slice(0, 8000);
+    var body = cleanBody_(m);
     parts.push('--- Message ' + (i + 1) + ' of ' + msgs.length + ' | ' + (mine ? 'FROM THE STORE' : 'FROM THE CUSTOMER') + ' (' + from.replace(/<[^>]*>/g, '').trim() + ') | ' + m.getDate().toISOString() + '\n' + body);
   });
   var text = 'Subject: ' + t.getFirstMessageSubject() + '\n\n' + parts.join('\n\n');
@@ -549,9 +559,12 @@ function syncEmails_(cap) {
       var cm = customerMsgs_(t), n = cm.length;       // only the customer's messages count; our replies never trigger a read
       if (!n || (r && r.msgCount === n)) return;      // nothing new from the customer
       if (parsed >= cap) return;
-      if (!key) { problem = 'Add the Anthropic API key so emails can be read.'; return; }
       parsed++;
-      var from = cm[0].getFrom().replace(/<[^>]*>/g, '').trim();
+      var from = cm[0].getFrom().replace(/<[^>]*>/g, '').trim().replace(/^"+|"+$/g, '').trim();
+      if (!key) {   // free mode: no AI, no cost. The app reads the stored text itself.
+        put(r, [id, t.getFirstMessageSubject(), from, t.getLastMessageDate(), 'todo', 'text', '[]', JSON.stringify({ mode: 'text', text: customerText_(t), fromName: from }), n, now, '', '']);
+        return;
+      }
       try {
         var res = emailData_(askModel_(key, threadText_(t)));
         put(r, [id, t.getFirstMessageSubject(), from, t.getLastMessageDate(), 'todo', res.checklist, JSON.stringify(res.missing), JSON.stringify(res.data), n, now, '', '']);
@@ -594,7 +607,7 @@ function markEmailDone_(id, who, order) {
 }
 
 // Time-driven trigger (every 10 minutes).
-function emailTimer_() { syncEmails_(10); }
+function emailTimer_() { syncEmails_(40); }
 
 // Run this once from the Apps Script editor (Run > setupEmail): Google asks to allow Gmail access, the labels are
 // created if missing, and the 10-minute timer is installed.
