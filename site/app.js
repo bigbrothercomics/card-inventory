@@ -42,17 +42,19 @@ const S = {
 };
 
 /* ---------- shared inventory (Google Sheet via Apps Script) ---------- */
-async function api(action, data) {
+// One request to the backend, with this device's sign-in token. Returns the reply as is (see account.js for signing in).
+async function post(action, data) {
   if (!window.INVENTORY_API) throw new Error('The app is not connected to the inventory sheet yet (config.js)');
-  const body = JSON.stringify({ action, code: ls.get('storecode'), ...data });
+  const body = JSON.stringify({ action, token: ls.get('session'), ...data });
   let r;
   try { r = await fetch(window.INVENTORY_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body }); }
   catch (e) { throw new Error('Could not reach the inventory sheet. Check the internet connection'); }
-  const j = await r.json().catch(() => ({ ok: false, error: 'The inventory sheet sent a bad reply (HTTP ' + r.status + ')' }));
-  if (j.needCode) {
-    const c = prompt('Enter the store code to use the inventory:');
-    if (c) { ls.set('storecode', c.trim()); return api(action, data); }
-  }
+  return r.json().catch(() => ({ ok: false, error: 'The inventory sheet sent a bad reply (HTTP ' + r.status + ')' }));
+}
+async function api(action, data) {
+  const j = await post(action, data);
+  // Not signed in (first visit, signed out, or the password was changed elsewhere): show the sign-in screen, then retry.
+  if (j.needLogin) { await signIn(!!j.setup); return api(action, data); }
   if (!j.ok) throw new Error(j.error || 'Request failed');
   return j;
 }
@@ -170,6 +172,7 @@ async function loadPrices() {
     const when = S.ck.created ? new Date(S.ck.created.replace(' ', 'T')).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '?';
     $('#cksummary').textContent = `Card Kingdom prices from ${when}, ${Number(S.ck.count).toLocaleString()} listings.`;
     renderAll();
+    fillBoxes();
   } catch (e) {
     $('#cksummary').innerHTML = '<span class="err">Card Kingdom prices could not be loaded (' + esc(e.message) + '). Every card will show "Check TCG" until they load.</span>';
   }
@@ -231,7 +234,7 @@ function tileHTML(t, cartMode) {
     <div class="imgwrap"><img loading="lazy" src="${esc(meta.img)}" alt="${esc(meta.name)}">${badge}</div>
     <div class="info">
       <div class="name">${esc(meta.name)}</div>
-      <div class="sub">${esc(meta.setName)} · #${esc(meta.cn)}${qty ? boxTag(meta.name, ' · Box ', '') : ''}</div>
+      <div class="sub">${esc(meta.setName)} · #${esc(meta.cn)}${qty ? boxTag(meta.name, ' · Box ', '') + caseTag(meta.name) : ''}</div>
       ${priceHTML(t)}
       <div class="ctrls">${controls}</div>
     </div>
@@ -251,7 +254,19 @@ function boxTag(name, pre, none) {
   const b = window.Boxes && Boxes.get(name);
   return `<span class="boxtag" data-bn="${esc(name)}" data-pre="${esc(pre)}" data-none="${esc(none)}">${b === undefined ? '' : b ? esc(pre + b) : esc(none)}</span>`;
 }
+// "Case": the cheapest version of the card on Card Kingdom (Near Mint, nonfoil, any set) is $19.99 or more.
+// prices.json carries that cheapest price per card name for every card at or above $10 (see scripts/build-prices.mjs).
+const CASE_MIN = 19.99;
+function isCase(name) {
+  const m = S.ck && S.ck.mins;
+  if (!m || !window.Boxes) return false;
+  let p = m[Boxes.fold(name)];
+  if (p == null && String(name).includes(' // ')) p = m[Boxes.fold(String(name).split(' // ')[0])];
+  return p != null && p >= CASE_MIN;
+}
+const caseTag = name => `<span class="casetag" data-cn="${esc(name)}" title="Cheapest version is $19.99 or more: keep in the case">${isCase(name) ? 'Case' : ''}</span>`;
 function fillBoxes() {
+  document.querySelectorAll('.casetag[data-cn]').forEach(el => { const t = isCase(el.dataset.cn) ? 'Case' : ''; if (el.textContent !== t) el.textContent = t; });
   document.querySelectorAll('.boxtag[data-bn]').forEach(el => {
     const b = Boxes.get(el.dataset.bn);
     if (b === undefined) return;
@@ -847,7 +862,7 @@ function renderEmail() {
       return `<tr class="${r.cls}" data-i="${r.i}">
         <td>${o ? `<input type="checkbox" data-e="chk" ${l.checked ? 'checked' : ''} aria-label="Include">` : ''}</td>
         <td><input type="text" class="eq" data-e="qty" inputmode="numeric" value="${l.qty}" aria-label="Quantity"></td>
-        <td>${name}</td><td>${ver}</td><td class="box">${o ? boxTag(o.meta.name, '', '—') : '<span class="muted">—</span>'}</td><td>${price}</td>
+        <td>${name}</td><td>${ver}</td><td class="box">${o ? boxTag(o.meta.name, '', '—') + caseTag(o.meta.name) : '<span class="muted">—</span>'}</td><td>${price}</td>
         <td class="tot">${r.counts ? money(r.lineTotal) : ''}</td>
         <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
         <td><button class="erm" data-e="rm" title="Remove this line" aria-label="Remove line">×</button></td></tr>`;

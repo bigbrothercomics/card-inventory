@@ -182,3 +182,11 @@ a.btn.switch:hover{background:var(--accent);color:#fff}
 
 .boxtag{font-weight:700;color:#2a6b4d}
 td.box{font-weight:700;white-space:nowrap;color:#2a6b4d}
+.casetag{background:#b4410f;color:#fff;border-radius:4px;padding:0 6px;font-size:11px;font-weight:700;margin-left:6px;white-space:nowrap}
+.casetag:empty{display:none}
+
+.signin label{display:flex;flex-direction:column;gap:3px;margin:8px 0;font-size:13px;color:var(--muted,#6b6a64)}
+.signin input{font:inherit;padding:8px 10px;border:1px solid #e4e2dc;border-radius:8px;color:#1d1d1b}
+#signin{background:rgba(245,244,240,.98)}
+.modal details summary{cursor:pointer}
+.modal .box{max-height:92vh;overflow:auto}
