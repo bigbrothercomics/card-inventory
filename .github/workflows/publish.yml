@@ -1,10 +1,15 @@
 # Publishes the app to GitHub Pages with a fresh Card Kingdom price file.
-# Runs every 6 hours, whenever the app files change, and on demand (Actions tab > Publish > Run workflow).
+# Runs every 6 hours (hourly on Fridays 10 AM - 10 PM Pacific), whenever the app files change, and on demand (Actions tab > Publish > Run workflow).
 name: Publish
 
 on:
   schedule:
     - cron: "17 0,6,12,18 * * *"   # every 6 hours: 10:17 AM, 4:17 PM, 10:17 PM, 4:17 AM Pacific standard time (an hour later in daylight time)
+    # Release-day mode: these wake up hourly on Friday afternoon/evening UTC (and early Saturday UTC);
+    # the "gate" job below checks the clock in Los Angeles time (America/Los_Angeles, so daylight saving is
+    # handled automatically) and lets a run through only on Friday from 10 AM to 10 PM there.
+    - cron: "17 17-23 * * 5"
+    - cron: "17 0-6 * * 6"
   push:
     branches: [main]
   workflow_dispatch:
@@ -19,7 +24,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+    steps:
+      - id: g
+        run: |
+          run=true
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "17 0,6,12,18 * * *" ]; then
+            # an hourly release-day wake-up: only go ahead on Friday 10 AM - 10 PM Los Angeles time (daylight saving is automatic),
+            # and skip the hours the normal 6-hourly run already covers
+            dow=$(TZ=America/Los_Angeles date +%u)
+            hr=$(TZ=America/Los_Angeles date +%-H)
+            utc=$(date -u +%-H)
+            run=false
+            if [ "$dow" = "5" ] && [ "$hr" -ge 10 ] && [ "$hr" -le 22 ]; then run=true; fi
+            case "$utc" in 0|6|12|18) run=false;; esac
+          fi
+          echo "Pacific day=$(TZ=America/Los_Angeles date +%u) hour=$(TZ=America/Los_Angeles date +%-H) -> run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   publish:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
