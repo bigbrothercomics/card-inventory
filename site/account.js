@@ -19,8 +19,8 @@ function signIn(setup) {
           ? 'There is no store profile yet. Pick the username and password everyone at the store will use. Create it now, before anyone else opens the app.'
           : 'Use the store username and password. This computer stays signed in.'}</p>
         <label>Username<input name="username" autocomplete="username" value="${esc(ls.get('lastuser'))}" required></label>
-        <label>Password<input name="password" type="password" autocomplete="${make ? 'new-password' : 'current-password'}" ${make ? 'minlength="8"' : ''} required></label>
-        ${make ? '<label>Password again<input name="password2" type="password" autocomplete="new-password" required></label><p class="hint" style="margin:0">At least 8 characters.</p>' : ''}
+        <label>Password<input name="password" type="password" autocomplete="${make ? 'new-password' : 'current-password'}" required></label>
+        ${make ? '<label>Password again<input name="password2" type="password" autocomplete="new-password" required></label><p class="hint" style="margin:0">Any password works: any length, any characters.</p>' : ''}
         <div class="err sierr" role="alert" style="min-height:18px"></div>
         <button class="primary" type="submit" style="width:100%">${make ? 'Create store profile' : 'Sign in'}</button>
       </form>`;
@@ -61,7 +61,7 @@ function openAccount() {
     <details><summary><b>Change password</b></summary>
       <form id="pwform" class="signin" style="margin-top:6px">
         <label>Current password<input name="old" type="password" autocomplete="current-password" required></label>
-        <label>New password (8+ characters)<input name="n1" type="password" autocomplete="new-password" minlength="8" required></label>
+        <label>New password<input name="n1" type="password" autocomplete="new-password" required></label>
         <label>New password again<input name="n2" type="password" autocomplete="new-password" required></label>
         <div class="err" id="pwerr" style="min-height:18px"></div>
         <button class="primary" type="submit">Change password</button>
