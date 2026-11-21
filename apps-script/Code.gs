@@ -418,9 +418,9 @@ var LISTS_LABEL = 'lists', DONE_LABEL = 'complete';
 var EMAIL_MODEL = 'claude-haiku-5-5';
 var EMAIL_PROMPT = [
   'You read emails from customers of a Magic: The Gathering card store who send a want list (the cards they want to buy).',
-  'You get one email thread: the customer\'s first email and any later messages, each marked FROM THE CUSTOMER or FROM THE STORE.',
+  'You get the customer\'s messages from one email thread, oldest first. The store\'s own replies are not included.',
   'Our store asks every customer for a checklist: their name, their budget (per card and/or overall), and whether foils are OK.',
-  'Combine the whole thread. A later answer from the customer replaces an earlier one. Messages from the store only give context (the questions asked); never take facts from them except to understand a short reply like "yes" or "no".',
+  'Combine all the customer messages. A later answer replaces an earlier one. If a reply is only "yes"/"no" with no context, you cannot tell what it answers: use null.',
   'Reply with ONLY one JSON object, no other text, in exactly this shape:',
   '{"isWantList":true|false,"customer":string|null,"cards":[{"qty":number,"name":string,"set":string|null}],"perCardBudget":number|null,"overallBudget":number|null,"noBudget":true|false,"foils":"yes"|"no"|null,"notes":string|null}',
   'Rules:',
@@ -469,12 +469,17 @@ function emailsReply_() {
 }
 
 // The text sent to the AI: each message with who sent it, quoted earlier mail stripped.
-function threadText_(t) {
+// The customer's messages in a thread (ours are skipped: they cost money to send and add no card/budget facts).
+function customerMsgs_(t) {
   var me = '';
   try { me = String(Session.getEffectiveUser().getEmail()).toLowerCase(); } catch (e) {}
-  var msgs = t.getMessages(), parts = [];
+  return t.getMessages().filter(function (m) { return !(me && m.getFrom().toLowerCase().indexOf(me) >= 0); });
+}
+
+function threadText_(t) {
+  var msgs = customerMsgs_(t), parts = [];
   msgs.forEach(function (m, i) {
-    var from = m.getFrom(), mine = me && from.toLowerCase().indexOf(me) >= 0;
+    var from = m.getFrom(), mine = false;
     var body = String(m.getPlainBody() || '').replace(/\r/g, '');
     body = body.replace(/\n\s*On [^\n]{5,200}\n?[^\n]{0,100}wrote:[\s\S]*$/, '').replace(/\n-{2,}\s*Original Message[\s\S]*$/i, '');
     body = body.split('\n').filter(function (l) { return l.charAt(0) !== '>'; }).join('\n').trim().slice(0, 8000);
@@ -541,13 +546,12 @@ function syncEmails_(cap) {
         put(r, [id, r ? r.subject : t.getFirstMessageSubject(), r ? r.from : '', r ? r.received : t.getLastMessageDate(), 'done', r ? r.checklist : '', r ? r.missing : '', r ? r.parsed : '', r ? r.msgCount : 0, now, now, 'Gmail']);
         return;
       }
-      var n = t.getMessageCount();
-      if (r && r.msgCount === n) return;              // nothing new in this thread
+      var cm = customerMsgs_(t), n = cm.length;       // only the customer's messages count; our replies never trigger a read
+      if (!n || (r && r.msgCount === n)) return;      // nothing new from the customer
       if (parsed >= cap) return;
       if (!key) { problem = 'Add the Anthropic API key so emails can be read.'; return; }
       parsed++;
-      var from = '', msgs = t.getMessages();
-      for (var i = 0; i < msgs.length; i++) { var f = msgs[i].getFrom(); if (f.toLowerCase().indexOf(String(Session.getEffectiveUser().getEmail()).toLowerCase()) < 0) { from = f.replace(/<[^>]*>/g, '').trim(); break; } }
+      var from = cm[0].getFrom().replace(/<[^>]*>/g, '').trim();
       try {
         var res = emailData_(askModel_(key, threadText_(t)));
         put(r, [id, t.getFirstMessageSubject(), from, t.getLastMessageDate(), 'todo', res.checklist, JSON.stringify(res.missing), JSON.stringify(res.data), n, now, '', '']);
