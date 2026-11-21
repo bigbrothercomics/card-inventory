@@ -404,10 +404,10 @@ var ACTIONS = {
 // Gmail threads labelled "lists" are stored (the customer's own words only) in the EmailOrders tab as To do; the app reads
 // name, budgets, foils and cards out of that text. Done = labelled "complete" in Gmail, or completed in the app (which then
 // puts the "complete" label on the thread). This code only reads mail and adds/removes labels: it never sends or drafts.
-// Sheet columns 'checklist' and 'missing' are unused (the app works them out); kept so existing rows stay valid.
+// Sheet column 'checklist' = 'complete' when the thread has the Gmail label "Checklist Complete" (staff verified the checklist); 'missing' is unused.
 var EML = 'EmailOrders';
 var EML_HEAD = ['thread', 'subject', 'from', 'received', 'status', 'checklist', 'missing', 'parsed', 'msg_count', 'updated', 'done_at', 'done_by'];
-var LISTS_LABEL = 'lists', DONE_LABEL = 'complete';
+var LISTS_LABEL = 'lists', DONE_LABEL = 'complete', CHECK_LABEL = 'Checklist Complete';
 
 function emlTab_() {
   var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(EML);
@@ -436,7 +436,7 @@ function emailsReply_() {
   var list = emlRows_(emlTab_()).filter(function (r) { return r.status === 'todo'; }).map(function (r) {
     var data = null;
     try { data = JSON.parse(r.parsed || 'null'); } catch (e) {}
-    return { thread: r.thread, subject: r.subject, from: r.from, received: r.received instanceof Date ? r.received.toISOString() : String(r.received), data: data };   // data = {text, fromName}
+    return { thread: r.thread, subject: r.subject, from: r.from, received: r.received instanceof Date ? r.received.toISOString() : String(r.received), checkedByStaff: r.checklist === 'complete', data: data };   // data = {text, fromName}
   });
   list.sort(function (a, b) { return String(b.received).localeCompare(String(a.received)); });
   return { ok: true, emails: list, lastSync: Number(props.getProperty('EMAIL_SYNC_AT')) || 0, syncError: props.getProperty('EMAIL_SYNC_ERR') || '' };
@@ -470,8 +470,11 @@ function syncEmails_(cap) {
     var lists = GmailApp.getUserLabelByName(LISTS_LABEL);
     if (!lists) throw new Error('There is no Gmail label named "' + LISTS_LABEL + '"');
     var doneLabel = GmailApp.getUserLabelByName(DONE_LABEL) || GmailApp.createLabel(DONE_LABEL);
-    var doneIds = {};
+    var doneIds = {}, checkIds = {};
     doneLabel.getThreads(0, 150).forEach(function (t) { doneIds[t.getId()] = 1; });
+    // Threads staff labelled "Checklist Complete" in Gmail: the app shows them as checklist complete whatever the email says.
+    var checkLabel = GmailApp.getUserLabelByName(CHECK_LABEL);
+    if (checkLabel) checkLabel.getThreads(0, 150).forEach(function (t) { checkIds[t.getId()] = 1; });
     var sh = emlTab_(), byId = {};
     emlRows_(sh).forEach(function (r) { byId[r.thread] = r; });
     var seen = {}, parsed = 0;
@@ -484,12 +487,14 @@ function syncEmails_(cap) {
         put(r, [id, r ? r.subject : t.getFirstMessageSubject(), r ? r.from : '', r ? r.received : t.getLastMessageDate(), 'done', r ? r.checklist : '', r ? r.missing : '', r ? r.parsed : '', r ? r.msgCount : 0, now, now, 'Gmail']);
         return;
       }
+      var flag = checkIds[id] ? 'complete' : '';     // the Gmail "Checklist Complete" label, added or removed at any time
+      if (r && r.checklist !== flag) { sh.getRange(r.row, 6).setValue(flag); r.checklist = flag; }
       var cm = customerMsgs_(t), n = cm.length;       // only the customer's messages count; our replies never trigger a read
       if (!n || (r && r.msgCount === n)) return;      // nothing new from the customer
       if (parsed >= cap) return;
       parsed++;
       var from = cm[0].getFrom().replace(/<[^>]*>/g, '').trim().replace(/^"+|"+$/g, '').trim();
-      put(r, [id, t.getFirstMessageSubject(), from, t.getLastMessageDate(), 'todo', '', '[]', JSON.stringify({ text: customerText_(t), fromName: from }), n, now, '', '']);
+      put(r, [id, t.getFirstMessageSubject(), from, t.getLastMessageDate(), 'todo', flag, '[]', JSON.stringify({ text: customerText_(t), fromName: from }), n, now, '', '']);
     });
     // To do emails that Gmail no longer lists under "lists" (label removed, or older than the newest 60): check them directly.
     var checked = 0;
