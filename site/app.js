@@ -1182,7 +1182,9 @@ function mailParse(m) {
   const withQty = cand.filter(l => /^\s*[-*•]?\s*\d{1,3}\s*[x×]?\s+\S/.test(l) || /\S\s*[x×]\s*\d{1,3}\s*$/i.test(l));
   if (withQty.length) cand = withQty;
   const cards = parseWantList(cand.join('\n')).map(c => ({ qty: c.qty, name: c.name, set: c.set }));
-  const out = { customer: info.cust || '', cards, perCardBudget: parseMoney(info.card), overallBudget: parseMoney(info.total), noBudget, foils: info.foil == null ? null : (info.foil ? 'yes' : 'no'), notes: info.notes || '', fromName: d.fromName || '' };
+  // No "name:" in the email: the name on their Gmail/sender account is the customer name (not a bare email address).
+  const gname = d.fromName && !/@/.test(d.fromName) ? d.fromName.replace(/\s+/g, ' ').trim() : '';
+  const out = { customer: info.cust || gname, cards, perCardBudget: parseMoney(info.card), overallBudget: parseMoney(info.total), noBudget, foils: info.foil == null ? null : (info.foil ? 'yes' : 'no'), notes: info.notes || '', fromName: d.fromName || '' };
   out.missing = [];
   if (!out.customer) out.missing.push('name');
   if (out.perCardBudget == null && out.overallBudget == null && !noBudget) out.missing.push('budget');
@@ -1240,7 +1242,7 @@ async function loadEmailOrder(m) {
   const d = mailParse(m);
   if ((S.email.lines.length || S.email.text.trim()) && S.email.thread !== m.thread && !confirm('Replace the order you are working on with this email?')) return;
   const line = c => `${c.qty} ${c.name}` + (/^[a-z0-9]{2,5}$/i.test(c.set || '') ? ` (${c.set})` : '');
-  S.email = { ...emailBlank(), thread: m.thread, subject: m.subject, cust: d.customer || d.fromName || '', card: d.perCardBudget != null ? String(d.perCardBudget) : '', total: d.overallBudget != null ? String(d.overallBudget) : '',
+  S.email = { ...emailBlank(), thread: m.thread, subject: m.subject, cust: d.customer || '', card: d.perCardBudget != null ? String(d.perCardBudget) : '', total: d.overallBudget != null ? String(d.overallBudget) : '',
     foil: d.foils === 'yes', notes: d.notes || '', text: (d.cards || []).map(line).join('\n') };
   saveEmail(); emailFormOut(); renderInbox();
   const miss = d.missing || [];
