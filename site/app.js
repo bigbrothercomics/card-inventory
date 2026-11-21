@@ -769,12 +769,26 @@ function extractOrderInfo(text) {
   return { info, rest: rest.join('\n'), maybe };
 }
 
+// Section headers customers put between groups of cards ("Creatures", "Sorceries (12)", "Artifact Creatures", "Blue", "Lands",
+// "Instants & Sorceries", "Ramp"): made only of card-type / colour / section words, so they are not cards. A name we stock is never skipped.
+const HEADER_WORDS = new Set(('creature creatures enchantment enchantments sorcery sorceries instant instants artifact artifacts land lands planeswalker planeswalkers ' +
+  'battle battles spell spells permanent permanents legendary noncreature non nonland tribal kindred snow basic equipment equipments aura auras vehicle vehicles saga sagas token tokens ' +
+  'white blue black red green colorless colourless multicolor multicolors multicolored multicolour multicolored gold hybrid mono monocolored ' +
+  'and or the other others misc miscellaneous utility card cards main deck extras extra ' +
+  'ramp removal tutors tutor wipes sweepers staples wishlist wants want list mana rocks base fixing finishers commander commanders companion sideboard maybeboard considering').split(' '));
+function isHeaderLine(s) {
+  const t = s.replace(/\s*\((\d+|x\d+)\)\s*$/i, '').replace(/[\s:=\-–—*#]+$/, '').replace(/^[#*\-–—\s]+/, '').replace(/\s+\d{1,3}$/, '');
+  const words = fold(t).replace(/&/g, ' and ').split(/[^a-z]+/).filter(Boolean);
+  if (!words.length || !words.every(w => HEADER_WORDS.has(w))) return false;
+  return !(S.inv && stockIndex().has(norm(t)));
+}
+
 // "4 Lightning Bolt", "4x Lightning Bolt", "Lightning Bolt x4", "1 Lightning Bolt (M11) 146", "- Lightning Bolt"
 function parseWantList(text) {
   const out = [];
   for (let raw of String(text || '').split(/\r?\n/)) {
     let s = raw.replace(/^\s*(?:[-*•·>]+|SB:)\s*/i, '').replace(/^\s*\d{1,3}[.)]\s+(?=\S)/, '').replace(/\s+\*[FE]\*\s*$/i, '').trim();   // "1. Sol Ring": list numbering, not a quantity
-    if (!s || !/[a-z]/i.test(s) || /:\s*$/.test(s)) continue;                    // blank lines, headings like "Creatures:"
+    if (!s || !/[a-z]/i.test(s) || /:\s*$/.test(s) || isHeaderLine(s)) continue;   // blank lines, headings like "Creatures:" or "Sorceries"
     if (/^(deck|sideboard|commander|maybeboard|companion|total|thanks|thank you)\b/i.test(s) && !/\d/.test(s)) continue;
     let qty = 1, m;
     if ((m = s.match(/^(\d{1,3})\s*[x×]?\s+(.+)$/i))) { qty = +m[1]; s = m[2]; }
@@ -1257,7 +1271,7 @@ function mailParse(m) {
   const text = d.text || '';
   const { info, rest } = extractOrderInfo(text);
   const noBudget = !!info.noBudget || /\b(no (budget|limit|max|maximum|spending limit)|unlimited|budget (is not|isn'?t) (an issue|a concern))\b/i.test(text);
-  // When the list gives quantities ("2 Sol Ring", "Sol Ring x2"), only those lines are cards, so a sign-off like "Jane" isn't taken for one.
+  // Plain lines are cards unless they are a greeting, sentence, link, header or signature.
   // A signature ("Jordan", "- James") is not a card, whatever the sender's Gmail name says. Dropped: the 1-2 word line right after
   // a closing ("Thanks,"), the last line when it stands alone after a blank line or starts with a dash, and any line that is the
   // sender's or the stated customer's name. A real in-stock card name is never dropped.
@@ -1285,8 +1299,7 @@ function mailParse(m) {
   if (last > 0 && plain(rl[last]) && (!rl[last - 1].trim() || /^[-–—~]/.test(rl[last].trim())) && rl.filter((l, i) => i !== last && looksLikeCard(l)).length >= 2) sig.add(last);   // (a one- or two-card list keeps its last line)
   const names = new Set(`${d.fromName || ''} ${info.cust || ''}`.toLowerCase().split(/[\s,]+/).filter(w => w.length > 1));
   let cand = rl.filter((l, i) => (!sig.has(i) || idx.has(norm(l))) && !names.has(l.trim().toLowerCase().replace(/^[-–—~\s]+|[,.!\s]+$/g, ''))).filter(looksLikeCard);
-  const withQty = cand.filter(l => /^\s*[-*•]?\s*\d{1,3}\s*[x×]?\s+\S/.test(l) || /\S\s*[x×]\s*\d{1,3}\s*$/i.test(l));
-  if (withQty.length) cand = withQty;
+  // (Lists that mix "4 Sol Ring" with plain "Brainstorm" lines keep every line; signatures and headers are removed above.)
   const allCards = parseWantList(cand.join('\n')).map(c => ({ qty: c.qty, name: c.name, set: c.set }));
   const cards = allCards.filter(c => !excluded.has(spell(c.name.replace(/\s*[([].*$/, ''))));
   const exCount = allCards.length - cards.length;
