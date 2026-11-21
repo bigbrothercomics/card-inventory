@@ -1144,7 +1144,7 @@ async function downloadEmailPdf() {
 // The backend reads Gmail and Claude parses each thread; here we show the To do list, load one into the Email
 // orders form (then it prices like a pasted list), and mark emails complete (which labels them in Gmail).
 const gmailUrl = id => 'https://mail.google.com/mail/u/0/#all/' + id;
-S.inbox = { emails: [], hasKey: true, lastSync: 0, syncError: '', loaded: false, busy: false };
+S.inbox = { emails: [], lastSync: 0, syncError: '', loaded: false, busy: false };
 
 async function loadInbox(sync) {
   if (!$('#einbox')) return;
@@ -1152,7 +1152,7 @@ async function loadInbox(sync) {
   if (sync) { I.busy = true; renderInbox(); }
   try {
     const j = await api(sync ? 'emailSync' : 'emails', {});
-    Object.assign(I, { emails: j.emails, hasKey: j.hasKey, lastSync: j.lastSync, syncError: j.syncError, loaded: true });
+    Object.assign(I, { emails: j.emails, lastSync: j.lastSync, syncError: j.syncError, loaded: true });
   } catch (e) { I.syncError = 'Could not load emails: ' + e.message; }
   I.busy = false; renderInbox();
 }
@@ -1163,17 +1163,16 @@ async function openInbox() {
   if (Date.now() - S.inbox.lastSync > 5 * 60000 && !S.inbox.busy) loadInbox(true);
 }
 
-// A line that could be a card (not a greeting, sentence, sign-off or link). Free-mode emails are plain prose around the list.
+// A line that could be a card (not a greeting, sentence, sign-off or link). Emails are plain prose around the list.
 function looksLikeCard(line) {
   const s = line.trim();
-  if (!s || /[.!?:]$/.test(s) || /@|https?:|www\./i.test(s) || s.split(/\s+/).length > 8) return false;
+  if (!s || /[.!?:]$/.test(s) || /@|https?:|www\./i.test(s) || s.split(/\s+/).length > 8 || /\b(budget|foils?|limit|spend|spending)\b/i.test(s)) return false;
   return !/^(hi|hello|hey|dear|thanks|thank|thx|cheers|regards|best|sincerely|please|let me know|sent from|i |i'|we |can |could |would |also|here|my |our |it |this |that |there |just |if |are |is |do |does |have |has |what |when |how )/i.test(s);
 }
-// Free mode (no AI): read name, budgets, foils and the card list out of the customer's own words with the same
-// rules as the paste box. AI-read emails already carry these. Returns {customer, cards, perCardBudget, overallBudget, noBudget, foils, notes, missing, checklist}.
+// Read name, budgets, foils and the card list out of the customer's own words (the backend only stores the text) with the
+// same rules as the paste box. Returns {customer, cards, perCardBudget, overallBudget, noBudget, foils, notes, missing, checklist}.
 function mailParse(m) {
   const d = m.data || {};
-  if (d.mode !== 'text') return { ...d, missing: m.missing || [], checklist: m.checklist };
   const text = d.text || '';
   const { info, rest } = extractOrderInfo(text);
   const noBudget = /\b(no (budget|limit|max|maximum|spending limit)|unlimited|budget (is not|isn'?t) (an issue|a concern))\b/i.test(text);
@@ -1198,7 +1197,6 @@ function renderInbox() {
   const rows = I.emails.map(m => {
     const d = mailParse(m), miss = d.missing || [];
     const chip = d.checklist === 'complete' ? '<span class="chip ok">Checklist complete</span>'
-      : d.checklist === 'error' ? '<span class="chip err">Could not read</span>'
       : `<span class="chip need">Checklist needed</span>${miss.length ? ` <span class="muted">missing: ${esc(miss.join(', '))}</span>` : ''}`;
     const bits = [];
     if (d.cards) bits.push(`${d.cards.reduce((n, c) => n + c.qty, 0)} card${d.cards.length === 1 && d.cards[0].qty === 1 ? '' : 's'}`);
@@ -1208,11 +1206,11 @@ function renderInbox() {
     if (d.foils) bits.push(d.foils === 'yes' ? 'foils OK' : 'no foils');
     const when = m.received ? new Date(m.received).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
     return `<div class="irow${S.email.thread === m.thread ? ' cur' : ''}" data-t="${esc(m.thread)}">
-      <div class="imain"><b>${esc(d.customer || d.fromName || m.from || 'Unknown sender')}</b> <span class="muted">${esc(m.subject)} · ${esc(when)}</span><br>${chip} <span class="muted">${d.error ? esc(d.error) : esc(bits.join(' · '))}</span></div>
+      <div class="imain"><b>${esc(d.customer || d.fromName || m.from || 'Unknown sender')}</b> <span class="muted">${esc(m.subject)} · ${esc(when)}</span><br>${chip} <span class="muted">${esc(bits.join(' · '))}</span></div>
       <div class="iact"><button data-i="open" ${d.cards && d.cards.length ? '' : 'disabled'}>Open</button><a href="${esc(gmailUrl(m.thread))}" target="_blank" rel="noopener" class="hint">Gmail ↗</a><button data-i="done" title="Remove from To do and label it complete in Gmail">Mark complete</button></div></div>`;
   }).join('');
   box.innerHTML = `<div class="ihead"><b>To do: customer emails</b> <span class="muted">${I.emails.length} waiting · checked ${esc(ago)}</span>
-    <button data-i="sync" ${I.busy ? 'disabled' : ''}>${I.busy ? 'Checking Gmail…' : 'Refresh'}</button>${I.hasKey ? '' : '<span class="muted" title="Emails are read by the app with simple rules (no cost). Name, budget and foils work best written like: name: Jane · budget: $50 · no foils">free reading</span>'}</div>
+    <button data-i="sync" ${I.busy ? 'disabled' : ''}>${I.busy ? 'Checking Gmail…' : 'Refresh'}</button><span class="muted" title="Name, budget and foils are read best when written like: name: Jane · budget: $50 · no foils">read by simple rules</span></div>
     ${I.syncError ? `<p class="note err">${esc(I.syncError)}</p>` : ''}
     ${rows || `<p class="note">${I.loaded ? 'No emails waiting. Label an email "lists" in Gmail and it shows up here.' : 'Loading…'}</p>`}`;
 }
@@ -1221,20 +1219,13 @@ async function onInboxClick(e) {
   const b = e.target.closest('[data-i]'); if (!b) return;
   const act = b.dataset.i, row = b.closest('.irow'), m = row ? S.inbox.emails.find(x => x.thread === row.dataset.t) : null;
   if (act === 'sync') return loadInbox(true);
-  if (act === 'key') {
-    const k = prompt('Paste the Anthropic API key (starts with sk-ant-). It is stored only in the store\'s Google Apps Script and is used only to read emails.');
-    if (!k) return;
-    try { const j = await api('emailSetKey', { key: k.trim() }); S.inbox.hasKey = j.hasKey; toast('Key saved. Checking emails…'); loadInbox(true); }
-    catch (x) { toast('Key not saved: ' + x.message); }
-    return;
-  }
   if (!m) return;
   if (act === 'done') {
-    if (!confirm(`Mark this email complete?\n\n${(m.data && m.data.customer) || m.from} · ${m.subject}\n\nIt leaves the To do list and gets the "complete" label in Gmail. Inventory is not changed.`)) return;
+    if (!confirm(`Mark this email complete?\n\n${mailParse(m).customer || m.from} · ${m.subject}\n\nIt leaves the To do list and gets the "complete" label in Gmail. Inventory is not changed.`)) return;
     b.disabled = true;
     try {
       const j = await api('emailDone', { thread: m.thread });
-      Object.assign(S.inbox, { emails: j.emails, hasKey: j.hasKey, lastSync: j.lastSync, syncError: j.syncError });
+      Object.assign(S.inbox, { emails: j.emails, lastSync: j.lastSync, syncError: j.syncError });
       if (S.email.thread === m.thread) { S.email.thread = ''; S.email.subject = ''; saveEmail(); emailFormOut(); }
       renderInbox();
       toast(j.gmail === 'ok' ? 'Marked complete (Gmail label added)' : 'Marked complete here, but Gmail said: ' + j.gmail);
