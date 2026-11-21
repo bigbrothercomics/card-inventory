@@ -324,7 +324,7 @@ var ACTIONS = {
   setup: function (b) {
     var user = clean_(b.username, 40), pw = String(b.password || '');
     if (user.length < 3) throw new Error('The username needs at least 3 characters');
-    if (pw.length < 8) throw new Error('The password needs at least 8 characters');
+    if (!pw.length) throw new Error('Enter a password');   // any password is allowed: any length, any characters
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(25000)) throw new Error('Busy, try again');
     try {
@@ -367,7 +367,7 @@ var ACTIONS = {
     var a = acct_(), pw = String(b.newPassword || '');
     if (!a) throw new Error('There is no store profile');
     if (hash_(a.salt, String(b.password || '')) !== a.hash) throw new Error('The current password is wrong');
-    if (pw.length < 8) throw new Error('The new password needs at least 8 characters');
+    if (!pw.length) throw new Error('Enter a new password');
     var salt = Utilities.getUuid();
     acctTab_().getRange(2, 2, 1, 2).setValues([[salt, hash_(salt, pw)]]);
     acctTab_().getRange(2, 5, 1, 1).setValues([[new Date()]]);
