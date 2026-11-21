@@ -202,3 +202,4 @@ td.box{font-weight:700;white-space:nowrap;color:#2a6b4d}
 .chip{display:inline-block;font-size:12px;font-weight:650;padding:1px 8px;border-radius:99px}
 .chip.ok{background:#dff3e4;color:#1a7f37}.chip.need{background:var(--warn-bg);color:var(--warn)}.chip.err{background:#f9c9c9;color:var(--bad)}
 .inbox .note{margin:8px 12px}
+.etab td.cnote{font-size:13px;max-width:260px;color:#1d1d1b}

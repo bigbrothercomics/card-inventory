@@ -711,6 +711,7 @@ function saveEmail() { ls.set('emaildraft', JSON.stringify(S.email)); }
 //   "name: Jane" · "customer - Jane" · "budget: $10" · "$10 total" · "per card budget: $2" · "$2 each" · "max $2/card"
 //   "no foils" · "foils: yes" · "foils ok" · "ck pricing: yes" · "notes: ships Friday"
 // Returns the details found and the remaining lines (the card list).
+const FOIL_PREF_WORDS = new Set('foil foils etched nonfoil nonfoils non no yes ok okay fine sure allowed please are is not dont don\'t do want need prefer preferred welcome good great with me only any and or include included including thanks thank you i im i\'m we totally absolutely definitely nope yep yeah are be too also cards card for all my'.split(' '));
 function extractOrderInfo(text) {
   const info = {}, rest = [], maybe = [];
   const YES = /\b(yes|y|ok|okay|fine|sure|allowed|include|including|incl|true|good|accept|accepted|please)\b/;
@@ -724,7 +725,9 @@ function extractOrderInfo(text) {
     let m;
     if (!cardish && (m = line.match(/^\s*(?:customer'?s?\s*name|customer|cust|name|for|buyer|client)\s*[:=\-–]\s*(.+)$/i))) { info.cust = m[1].trim(); continue; }
     if (!cardish && (m = line.match(/^\s*notes?\s*[:=\-–]\s*(.+)$/i))) { info.notes = m[1].trim(); continue; }
-    if (!cardish && /\bfoils?\b/.test(s) && s.split(' ').length <= 6) { info.foil = !NO.test(s) && (YES.test(s) || !/[:=]/.test(s)); continue; }
+    // A foil-preference line is only "foil(s)" plus yes/no-type words ("no foils", "foils: ok", "foils are fine"). A card line that
+    // mentions foil ("Sol Ring (foil)", "foil Sol Ring") is a request about that card, so it stays in the list.
+    if (!cardish && /\bfoils?\b/.test(s) && s.split(' ').length <= 8 && s.replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter(Boolean).every(w => FOIL_PREF_WORDS.has(w))) { info.foil = !NO.test(s) && (YES.test(s) || !/[:=]/.test(s)); continue; }
     if (!cardish && /\b(ck|card ?kingdom)\b/.test(s) && s.split(' ').length <= 8) continue;   // "CK pricing: yes" lines: not a card, nothing to fill in
     if (!cardish && /\b(budget|total|overall|max|maximum|limit|spend|spending|cap|up to|per|each|apiece)\b|\$|\bdollars?\b/.test(s) && amount(s) != null) {
       const per = /\b(per|each|ea|a card|single|singles|individual|apiece)\b|\/\s*(card|ea|each)\b|\bcard budget\b/.test(s);
@@ -749,7 +752,7 @@ function parseWantList(text) {
     if ((m = s.match(/^(\d{1,3})\s*[x×]?\s+(.+)$/i))) { qty = +m[1]; s = m[2]; }
     else if ((m = s.match(/^(.+?)\s*[x×]\s*(\d{1,3})$/i)) || (m = s.match(/^(.+?)\s*\((?:x\s*)?(\d{1,3})\)$/i))) { s = m[1]; qty = +m[2]; }
     let set = '', cn = '';
-    if ((m = s.match(/^(.+?)\s*[([]\s*([a-z0-9]{2,6})\s*[)\]]\s*([0-9a-z★-]+)?\s*$/i))) { s = m[1]; set = m[2].toLowerCase(); cn = m[3] || ''; }
+    if ((m = s.match(/^(.+?)\s*[([]\s*([a-z0-9]{2,6})\s*[)\]]\s*([0-9a-z★-]+)?\s*$/i)) && !/^(foil|foils|etched|nm|lp|mp|hp|dmg|alt|any|new|old|art|ok|yes|no)$/i.test(m[2])) { s = m[1]; set = m[2].toLowerCase(); cn = m[3] || ''; }
     s = s.replace(/\s+/g, ' ').trim();
     if (s && qty > 0) out.push({ qty, name: s, set, cn, found: null, pick: '', checked: false, price: null });
   }
@@ -855,7 +858,7 @@ function renderEmail() {
   if (!em.lines.length) { box.innerHTML = ''; foot.innerHTML = ''; return; }
   const c = computeEmail();
   const verLabel = o => `${o.meta.setName} #${o.meta.cn}${finLabel(o.finish)} · ${o.have} in stock · ${o.price != null ? money(o.price) : 'no CK price'}`;
-  box.innerHTML = `<table class="etab"><thead><tr><th title="Tick to include">✓</th><th>Qty</th><th>Card</th><th>Version</th><th title="Where the card is stored (from its original printing)">Box</th><th>Price ea</th><th class="tot">Total</th><th>Notes</th><th></th></tr></thead><tbody>` +
+  box.innerHTML = `<table class="etab"><thead><tr><th title="Tick to include">✓</th><th>Qty</th><th>Card</th><th>Version</th><th title="What the customer wrote after the card name">Customer notes</th><th title="Where the card is stored (from its original printing)">Box</th><th>Price ea</th><th class="tot">Total</th><th>Notes</th><th></th></tr></thead><tbody>` +
     c.rows.map(r => {
       const l = r.l, o = r.o;
       const name = l.found === false ? `<input type="text" class="en" data-e="name" value="${esc(l.name)}" aria-label="Card name">` : `<span class="ename">${esc(l.name)}</span>`;
@@ -867,7 +870,7 @@ function renderEmail() {
       return `<tr class="${r.cls}" data-i="${r.i}">
         <td>${o ? `<input type="checkbox" data-e="chk" ${l.checked ? 'checked' : ''} aria-label="Include">` : ''}</td>
         <td><input type="text" class="eq" data-e="qty" inputmode="numeric" value="${l.qty}" aria-label="Quantity"></td>
-        <td>${name}</td><td>${ver}</td><td class="box">${o ? boxTag(o.meta.name, '', '—') + caseTag(o.meta.name) : '<span class="muted">—</span>'}</td><td>${price}</td>
+        <td>${name}</td><td>${ver}</td><td class="cnote">${l.note ? esc(l.note) : ""}</td><td class="box">${o ? boxTag(o.meta.name, '', '—') + caseTag(o.meta.name) : '<span class="muted">—</span>'}</td><td>${price}</td>
         <td class="tot">${r.counts ? money(r.lineTotal) : ''}</td>
         <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
         <td><button class="erm" data-e="rm" title="Remove this line" aria-label="Remove line">×</button></td></tr>`;
@@ -955,6 +958,53 @@ function editDistance(a, b, max) {
   return prev[b.length];
 }
 
+// Requests written after a card name ("Frantic Search (SLD, Spiderman News Page)", "Sol Ring - foil please", "Lightning Bolt, any
+// version") are moved into the line's note (the "Customer notes" column). The rule that keeps cards from being miscategorised:
+// a line is only split when the text before the split is exactly a real card name (in stock, or on Scryfall's list of every card
+// name). A line that is already a full card name ("Atraxa, Praetors' Voice", "Fire // Ice") is never split. If nothing before a
+// split is a real card, a trailing (bracket) or " - dash" request is still taken as a note, since card names don't end that way.
+// Plain words after a name are only taken as a note when they start with a request word (foil, nm, alt art, "please"...).
+const NOTE_START = /^(foil|foils|etched|nonfoil|non-foil|nm|lp|mp|hp|dmg|near mint|played|alt|alternate|alternative|art|extended|borderless|showcase|full art|textless|promo|retro|old|new|newest|oldest|cheapest|cheaper|any|either|preferably|prefer|preferred|only|japanese|jp|german|french|spanish|signed|altered|please|pls|plz|if|from|in|sld|secret lair|serialized|surge|galaxy|gilded|ub|\d+(st|nd|rd|th)?\b|#)/i;
+async function splitNotes(lines) {
+  let known = null;
+  try { await loadCardNames(); known = new Set(cardNameList.map(c => c.s)); } catch (e) {}
+  const idx = stockIndex();
+  const isCard = s => { const t = spell(s); return !!t && ((known && known.has(t)) || idx.has(norm(s))); };
+  const clean = r => r.replace(/^[\s,;:|\/*\-–—]+/, '').replace(/^[([]\s*/, '').replace(/\s*[)\]]\s*$/, '').replace(/\s*[,;]\s*$/, '').trim();
+  for (const l of lines) {
+    const full = l.name;
+    if (!full || isCard(full)) continue;
+    if (known) { const cn = closestIn(spell(full), 2); if (cn && Math.abs(spell(cn).length - spell(full).length) <= 2) continue; }   // one or two letters off a real card: a typo of the whole name, not a name plus a request
+    const lead = full.match(/^(foil|foiled|etched|nonfoil)\s+(.+)$/i);   // "Foil Sol Ring": the request comes first
+    if (lead && isCard(lead[2])) { l.name = lead[2]; l.note = lead[1]; continue; }
+    let name = '', rest = '';
+    const cuts = [];
+    const re = /\s+[-–—|:]\s+|\s+\/(?!\/)\s+|\s*[,;]\s*|\s*[(\[]|\s+\*\s*|\s{2,}|\s+/g;
+    let m;
+    while ((m = re.exec(full))) {
+      if (!m[0]) { re.lastIndex++; continue; }
+      const sep = m[0], after = full.slice(m.index + sep.length);
+      const spaceOnly = /^\s+$/.test(sep);
+      if (!after && !/[(\[]/.test(sep)) continue;
+      if (spaceOnly && !NOTE_START.test(after)) continue;            // plain words only when they start like a request
+      if (/[,;]/.test(sep) && !NOTE_START.test(after) && !/^[a-z0-9(\[]/.test(after)) continue;   // "Name, Another Name" could be one card's name
+      cuts.push({ at: m.index, sep });
+    }
+    let hit = null;
+    for (const c of cuts) { const pre = full.slice(0, c.at).trim(); if (isCard(pre) && (!hit || pre.length > hit.pre.length)) hit = { pre, c }; }
+    if (hit) { name = hit.pre; rest = full.slice(hit.c.at); }
+    else {
+      const b = full.match(/^(.+?)\s*[([]([^)\]]*)[)\]]\s*$/) || full.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+      if (b && !/^\s*$/.test(b[2])) { name = b[1].trim(); rest = b[2]; }
+    }
+    if (!name || !clean(rest)) continue;
+    l.name = name; l.note = clean(rest);
+    // a leading set code in the request ("SLD, ...") is also used to prefer that set
+    const sc = l.note.match(/^([A-Z0-9]{3,5})(?=[\s,;:-]|$)/);
+    if (sc && !l.set && !FOIL_PREF_WORDS.has(sc[1].toLowerCase()) && !/^(NM|LP|MP|HP|DMG|ANY|ASAP|PLS|PLZ)$/.test(sc[1])) l.set = sc[1].toLowerCase();
+  }
+}
+
 // Names not in stock are checked on Scryfall so typos show up (and a fixed typo can still match our stock).
 async function resolveNames(lines) {
   const idx = stockIndex();
@@ -1014,7 +1064,7 @@ async function checkEmailList() {
   if (!lines.length) { toast('Paste the card list first'); $('#elist').focus(); return; }
   if (!S.loaded) { toast('The inventory has not loaded yet'); return; }
   $('#echeck').disabled = true; $('#enote').textContent = 'Checking the list…';
-  try { await resolveNames(lines); }
+  try { await splitNotes(lines); await resolveNames(lines); }
   catch (e) { toast('Could not check names on Scryfall (' + e.message + '). In-stock cards still work.'); }
   finally { $('#echeck').disabled = false; }
   S.email.lines = splitByStock(lines); saveEmail(); renderEmail();
@@ -1166,7 +1216,10 @@ async function openInbox() {
 // A line that could be a card (not a greeting, sentence, sign-off or link). Emails are plain prose around the list.
 function looksLikeCard(line) {
   const s = line.trim();
-  if (!s || /[.!?:]$/.test(s) || /@|https?:|www\./i.test(s) || s.split(/\s+/).length > 8 || /\b(budget|foils?|limit|spend|spending)\b/i.test(s)) return false;
+  // A card line can carry a request after the name ("Frantic Search (SLD, Spiderman News Page)", "Sol Ring - foil please"), so
+  // lines with a bracket or dash, or a leading quantity, may be longer than a plain name.
+  const long = /[([]|\s[-–—]\s/.test(s) || /^\s*[-*•]?\s*\d{1,3}\s*[x×]?\s+\S/.test(s);
+  if (!s || /[.!?:]$/.test(s) || /@|https?:|www\./i.test(s) || s.split(/\s+/).length > (long ? 16 : 8) || /^(no |yes |any )?(foils?|budget|limit|spend|spending)\b|\b(budget|spending limit)\b/i.test(s)) return false;
   return !/^(hi|hello|hey|dear|thanks|thank|thx|cheers|regards|best|sincerely|please|let me know|sent from|i |i'|we |can |could |would |also|here|my |our |it |this |that |there |just |if |are |is |do |does |have |has |what |when |how )/i.test(s);
 }
 // Read name, budgets, foils and the card list out of the customer's own words (the backend only stores the text) with the
