@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>All Seeing Inventory</title>
 <link rel="icon" href="logo.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#ffffff">
 <link rel="stylesheet" href="app.css?v=16">
 </head>
 <body data-mode="sell">
@@ -86,5 +89,6 @@
 <script src="config.js"></script>
 <script src="boxes.js?v=16"></script>
 <script src="app.js?v=16"></script>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});</script>
 </body>
 </html>
