@@ -701,7 +701,7 @@ async function onMissingClick(e) {
 // Paste a customer's want list; each line is matched to what's in stock, priced at CK NM retail, and
 // checked against their budgets. Ticked lines are removed from inventory with one "sell", and the
 // customer gets a PDF named after them.
-const E_ORANGE = 'orange', E_RED = 'red';
+const E_ORANGE = 'orange', E_RED = 'red', E_BLUE = 'blue';   // blue = foil
 const parseMoney = v => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
 function emailBlank() { return { cust: '', card: '', total: '', foil: false, notes: '', text: '', lines: [] }; }
 function saveEmail() { ls.set('emaildraft', JSON.stringify(S.email)); }
@@ -838,6 +838,13 @@ function computeEmail() {
     if (over) r.flag += ' · added anyway'; else r.flag = short;
     total += r.lineTotal; cards += r.have; r.counts = true;
     return r;
+  });
+  // Foil (or etched) copies are marked blue, unless the row is already red or orange (the version still says Foil).
+  rows.forEach(r => {
+    r.foil = !!(r.o && r.o.finish && r.o.finish !== 'nonfoil');
+    if (!r.foil) return;
+    if (!r.cls) r.cls = E_BLUE;
+    r.flag = r.flag ? r.flag + ' · Foil' : 'Foil';
   });
   return { rows, total, cards, cardB, totalB };
 }
@@ -1057,6 +1064,7 @@ async function completeEmailOrder() {
     if (r.counts) {
       const sold = Math.min(r.have, left.get(r.o.key) || 0); left.set(r.o.key, (left.get(r.o.key) || 0) - sold);
       pdfRows.push(sold ? { qty: sold, asked: r.l.qty, name: r.l.name, ver: v, price: r.price, total: r.price * sold, cls: r.cls === E_ORANGE ? E_ORANGE : '', given: true } : { qty: r.l.qty, asked: r.l.qty, name: r.l.name, ver: '', cls: E_RED });
+      if (sold && r.cls === E_BLUE) pdfRows[pdfRows.length - 1].cls = E_BLUE;
     } else if (r.cls === E_RED) pdfRows.push({ qty: r.l.qty, asked: r.l.qty, name: r.l.name, ver: '', cls: E_RED });
     else if (r.cls === E_ORANGE) pdfRows.push({ qty: r.have, asked: r.l.qty, name: r.l.name, ver: v, price: r.price, cls: E_ORANGE });
   }
@@ -1082,7 +1090,7 @@ async function logoDataUrl() {
 async function emailPdf(d) {
   if (!window.jspdf) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
   const doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'letter' });
-  const W = 612, M = 40, FILL = { orange: [255, 217, 168], red: [249, 201, 201] };
+  const W = 612, M = 40, FILL = { orange: [255, 217, 168], red: [249, 201, 201], blue: [201, 222, 255] };
   try { doc.addImage(await logoDataUrl(), 'PNG', M, 32, 64, 64); } catch (e) {}
   doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.text('Big Brother Comics', M + 78, 58);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(12);
@@ -1094,6 +1102,7 @@ async function emailPdf(d) {
   doc.setTextColor(30);
   doc.setFillColor(...FILL.orange); doc.rect(M, y - 9, 11, 11, 'F'); doc.text('Orange rows: over budget', M + 16, y);
   doc.setFillColor(...FILL.red); doc.rect(M + 170, y - 9, 11, 11, 'F'); doc.text('Red rows: out of stock', M + 186, y);
+  doc.setFillColor(...FILL.blue); doc.rect(M + 340, y - 9, 11, 11, 'F'); doc.text('Blue rows: foil', M + 356, y);
   y += 24;
   const cols = [{ t: 'Qty', x: M + 4 }, { t: 'Card', x: M + 54 }, { t: 'Version', x: M + 270 }, { t: 'Price ea', x: W - M - 74, r: true }, { t: 'Total', x: W - M - 4, r: true }];
   const fit = (s, w) => { s = String(s || ''); if (doc.getTextWidth(s) <= w) return s; while (s && doc.getTextWidth(s + '…') > w) s = s.slice(0, -1); return s + '…'; };

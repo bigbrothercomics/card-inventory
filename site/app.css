@@ -117,11 +117,13 @@ a.back{color:var(--accent);font-size:14px}
 #elist{display:block;width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;resize:vertical}
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:13px;margin:4px 0 8px}
 .legend .sw{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:5px;border:1px solid rgba(0,0,0,.15)}
-.sw.orange{background:#ffd9a8}.sw.red{background:#f9c9c9}
+.sw.orange{background:#ffd9a8}.sw.red{background:#f9c9c9}.sw.blue{background:#c9deff}
 .etabwrap{overflow-x:auto}
 .etab td{vertical-align:middle}
 .etab tr.orange td{background:#ffe9cc}
 .etab tr.red td{background:#fbdcdc}
+.etab tr.blue td{background:#e1ecff}
+.etab tr.blue .flag{color:#1b4fb0}
 .etab .ename{font-weight:600}
 .etab input.eq{width:44px;text-align:center}
 .etab input.ep{width:64px}
