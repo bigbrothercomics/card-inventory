@@ -59,6 +59,8 @@ async function api(action, data) {
   return j;
 }
 
+// Reload button (the installed app has no browser reload): re-fetch the page from the server first so a fresh version is used.
+{ const rb = document.getElementById('reloadbtn'); if (rb) rb.addEventListener('click', () => { rb.disabled = true; rb.textContent = 'Reloading…'; fetch(location.pathname, { cache: 'reload' }).catch(() => {}).finally(() => location.reload()); }); }
 function setSync(text, bad) { const el = $('#sync'); el.textContent = text; el.classList.toggle('bad', !!bad); }
 
 async function loadInventory() {
@@ -1311,6 +1313,8 @@ function mailParse(m) {
   if (out.perCardBudget == null && out.overallBudget == null && !noBudget) out.missing.push('budget');
   if (!out.foils) out.missing.push('foils');
   out.checklist = out.missing.length ? 'needed' : 'complete';
+  // Staff put the Gmail label "Checklist Complete" on the thread: complete, whatever the email itself says.
+  if (m.checkedByStaff) { out.checklist = 'complete'; out.missing = []; out.byLabel = true; }
   return out;
 }
 
@@ -1319,7 +1323,7 @@ function renderInbox() {
   const ago = I.lastSync ? new Date(I.lastSync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet';
   const rows = I.emails.map(m => {
     const d = mailParse(m), miss = d.missing || [];
-    const chip = d.checklist === 'complete' ? '<span class="chip ok">Checklist complete</span>'
+    const chip = d.checklist === 'complete' ? `<span class="chip ok">Checklist complete</span>${d.byLabel ? ' <span class="muted">(Gmail label)</span>' : ''}`
       : `<span class="chip need">Checklist needed</span>${miss.length ? ` <span class="muted">missing: ${esc(miss.join(', '))}</span>` : ''}`;
     const bits = [];
     if (d.cards) bits.push(`${d.cards.reduce((n, c) => n + c.qty, 0)} card${d.cards.length === 1 && d.cards[0].qty === 1 ? '' : 's'}`);
@@ -1369,6 +1373,7 @@ async function loadEmailOrder(m) {
   saveEmail(); emailFormOut(); renderInbox();
   const miss = d.missing || [];
   if (miss.length) toast('Checklist still needed: ' + miss.join(', '));
+  else if (d.byLabel && !S.email.cust) toast('Checklist marked complete in Gmail. Type the customer name.');
   await checkEmailList();
 }
 

@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#ffffff">
-<link rel="stylesheet" href="app.css?v=21">
+<link rel="stylesheet" href="app.css?v=22">
 </head>
 <body data-mode="admin">
 <header>
@@ -24,6 +24,7 @@
     </div>
     <span class="spacer"></span>
     <a class="btn switch" href="./">Switch to sales</a>
+    <button type="button" id="reloadbtn" class="reload" title="Reload the app and get the latest version">↻ Reload</button>
     <span class="status" id="sync"></span>
     <button id="export" title="Download the whole inventory as a CSV backup">Export CSV</button>
     <label class="btn" title="Set each listed card's quantity to the file's value">Import CSV…<input type="file" id="importfile" accept=".csv,text/csv" hidden></label>
@@ -92,7 +93,7 @@
 
 <script src="config.js"></script>
 <script src="boxes.js?v=17"></script>
-<script src="app.js?v=34"></script>
+<script src="app.js?v=35"></script>
 <script src="account.js?v=18"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});</script>
 </body>

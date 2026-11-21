@@ -60,6 +60,7 @@ th{background:var(--accent-soft)}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:99px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:20;max-width:90vw}
 #toast.show{opacity:1}
 .status{font-size:13px;color:var(--muted)}
+button.reload{font-size:14px;padding:6px 12px;font-weight:600}
 .status.bad{color:var(--bad);font-weight:600}
 .tile.busy .qty .n{opacity:.5}
 details.ck{margin:0 0 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
