@@ -454,7 +454,6 @@ function receiptHTML(s, isLast) {
 // so every computer shares one sequence with no repeats.
 async function completeSale() {
   if (S.selling || !S.cart.length) return;
-  if (!S.who) { toast('Enter your name (top right) first so the order is logged'); $('#who').focus(); return; }
   if (!S.loaded) { toast('The inventory has not loaded yet'); return; }
   const missing = S.cart.find(l => l.price == null);
   if (missing) { toast(`Type a price for ${missing.name} first`); const el = document.querySelector(`.cline[data-lk="${CSS.escape(missing.lk)}"] input.pr`); if (el) el.focus(); return; }
@@ -526,7 +525,6 @@ function renderSales() {
    ===================================================================== */
 // The number changes on screen immediately; the save runs in the background and the server's answer is final.
 async function changeQty(key, delta) {
-  if (!S.who) { toast('Enter your name (top right) first so changes are logged'); $('#who').focus(); return false; }
   if (!S.loaded) { toast('The inventory has not loaded yet'); return false; }
   const t = S.tiles.get(key); if (!t) return false;
   const before = qtyOf(key);
@@ -671,7 +669,6 @@ function renderMissing() {
 async function addMissingByName() {
   const name = $('#mq').value.trim();
   if (!name) return;
-  if (!S.who) { toast('Enter your name (top right) first'); $('#who').focus(); return; }
   $('#madd').disabled = true;
   try {
     await throttle();
@@ -1036,7 +1033,6 @@ async function completeEmailOrder() {
   emailFormIn();
   const em = S.email;
   if (!em.cust) { toast('Type the customer name first. It names their PDF.'); $('#ecust').focus(); return; }
-  if (!S.who) { toast('Enter your name (top right) first so the order is logged'); $('#who').focus(); return; }
   const c = computeEmail();
   const take = c.rows.filter(r => r.counts);
   if (!take.length) { toast('Tick at least one card that is in stock'); return; }
@@ -1188,7 +1184,6 @@ async function onOrdersClick(e) {
   const b = e.target.closest('[data-oact]'); if (!b) return;
   const order = b.closest('[data-order]').dataset.order;
   const o = (S.orders || []).find(x => String(x.order) === order); if (!o) return;
-  if (!S.who) { toast('Enter your name (top right) first so the reversal is logged'); $('#who').focus(); return; }
   if (!confirm(`Reverse order #${order}${o.customer ? ' for ' + o.customer : ''}${o.total != null ? ' (' + money(o.total) + ')' : ''}?\n\nThis puts ${o.cards} card${o.cards === 1 ? '' : 's'} back into inventory. It can't be undone from here.`)) return;
   b.disabled = true; b.textContent = 'Reversing…';
   try {
@@ -1230,7 +1225,6 @@ function exportCSV() {
 }
 
 async function importCSV(text, fileName) {
-  if (!S.who) { toast('Enter your name (top right) first so the import is logged'); $('#who').focus(); return; }
   const rows = parseCSV(text); if (rows.length < 2) throw new Error('The file is empty');
   const h = rows[0].map(x => x.trim().toLowerCase());
   const ix = n => h.indexOf(n);
@@ -1257,9 +1251,8 @@ async function importCSV(text, fileName) {
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 
 async function init() {
-  S.who = ls.get('who');
-  $('#who').value = S.who;
-  $('#who').addEventListener('change', e => { S.who = e.target.value.trim(); ls.set('who', S.who); });
+  // Changes are logged under the signed-in account's username (the backend sets it too; this is just for display).
+  S.who = ls.get('acctuser') || 'Store';
   document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
   if (MODE === 'sell') {

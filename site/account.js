@@ -35,6 +35,7 @@ function signIn(setup) {
           if (j.needLogin && j.setup && !make) { show('setup'); return; }
           if (!j.ok) throw new Error(j.error || 'That did not work');
           ls.set('session', j.token); ls.set('acctuser', j.username); ls.set('lastuser', j.username);
+          S.who = j.username; showAccountName();
           try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
           el.remove(); resolve();
         } catch (e) {
@@ -67,12 +68,6 @@ function openAccount() {
         <button class="primary" type="submit">Change password</button>
         <p class="hint" style="margin:6px 0 0">Every other computer is signed out and must sign in again.</p>
       </form></details>
-    <details style="margin-top:8px"><summary><b>Scryfall extension key</b></summary>
-      <p class="hint" style="margin:6px 0">Type this key once into the Scryfall extension's popup (Advanced) on each computer. It lets the extension add cards, and nothing else.</p>
-      <div class="row" style="gap:6px"><input id="xkey" type="text" readonly placeholder="Press Show key" style="flex:1"><button id="xshow">Show key</button><button id="xcopy">Copy</button></div>
-      <button id="xnew" style="margin-top:6px">Make a new key</button>
-      <div class="hint" id="xmsg" style="min-height:16px"></div>
-    </details>
     <div class="row" style="justify-content:space-between;margin-top:14px"><button id="signout">Sign out</button><button id="acctclose" class="primary">Close</button></div>
   </div>`;
   document.body.appendChild(m);
@@ -92,22 +87,19 @@ function openAccount() {
       ls.set('session', j.token); m.remove(); toast('Password changed. Other computers are signed out.');
     } catch (e) { err.textContent = e.message; }
   });
-  $m('#xshow').onclick = async () => { try { $m('#xkey').value = (await api('extKey')).key; $m('#xmsg').textContent = ''; } catch (e) { $m('#xmsg').textContent = e.message; } };
-  $m('#xcopy').onclick = async () => {
-    try { if (!$m('#xkey').value) $m('#xkey').value = (await api('extKey')).key; await navigator.clipboard.writeText($m('#xkey').value); $m('#xmsg').textContent = 'Copied'; }
-    catch (e) { $m('#xmsg').textContent = 'Could not copy. Select the key and copy it.'; }
-  };
-  $m('#xnew').onclick = async () => {
-    if (!confirm('Make a new extension key? The extension on every computer stops working until you type the new key into it.')) return;
-    try { $m('#xkey').value = (await api('newExtKey')).key; $m('#xmsg').textContent = 'New key made. Update the extension on each computer.'; } catch (e) { $m('#xmsg').textContent = e.message; }
-  };
 }
 
+// The button shows who is signed in: changes are logged under this username.
+function showAccountName() {
+  const b = document.getElementById('acctbtn');
+  if (b) b.textContent = ls.get('acctuser') || 'Account';
+}
 (function addAccountButton() {
-  const who = document.getElementById('who');
-  if (!who || document.getElementById('acctbtn')) return;
+  const sync = document.getElementById('sync');
+  if (!sync || document.getElementById('acctbtn')) return;
   const b = document.createElement('button');
-  b.id = 'acctbtn'; b.type = 'button'; b.textContent = 'Account'; b.title = 'Change password, extension key, sign out';
+  b.id = 'acctbtn'; b.type = 'button'; b.title = 'Signed in. Click to change the password or sign out';
   b.addEventListener('click', openAccount);
-  who.parentNode.insertBefore(b, who);
+  sync.parentNode.appendChild(b);
+  showAccountName();
 })();
