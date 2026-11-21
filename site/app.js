@@ -231,7 +231,7 @@ function tileHTML(t, cartMode) {
     <div class="imgwrap"><img loading="lazy" src="${esc(meta.img)}" alt="${esc(meta.name)}">${badge}</div>
     <div class="info">
       <div class="name">${esc(meta.name)}</div>
-      <div class="sub">${esc(meta.setName)} · #${esc(meta.cn)}</div>
+      <div class="sub">${esc(meta.setName)} · #${esc(meta.cn)}${qty ? boxTag(meta.name, ' · Box ', '') : ''}</div>
       ${priceHTML(t)}
       <div class="ctrls">${controls}</div>
     </div>
@@ -242,7 +242,24 @@ function renderGrid(container, tiles) {
   tiles.forEach(t => S.tiles.set(t.key, t));
   const cartMode = container.hasAttribute('data-cart');
   container.innerHTML = tiles.map(t => tileHTML(t, cartMode)).join('');
+  ensureBoxes(tiles.filter(t => qtyOf(t.key) > 0).map(t => t.meta.name));
 }
+
+/* ---------- box locations (boxes.js) ---------- */
+// A tag whose text is filled in as soon as the box is known (instantly for cards seen before, otherwise after a Scryfall lookup).
+function boxTag(name, pre, none) {
+  const b = window.Boxes && Boxes.get(name);
+  return `<span class="boxtag" data-bn="${esc(name)}" data-pre="${esc(pre)}" data-none="${esc(none)}">${b === undefined ? '' : b ? esc(pre + b) : esc(none)}</span>`;
+}
+function fillBoxes() {
+  document.querySelectorAll('.boxtag[data-bn]').forEach(el => {
+    const b = Boxes.get(el.dataset.bn);
+    if (b === undefined) return;
+    const t = b ? el.dataset.pre + b : el.dataset.none;
+    if (el.textContent !== t) el.textContent = t;
+  });
+}
+function ensureBoxes(names) { if (window.Boxes) Boxes.ensure(names, fillBoxes); }
 
 function refreshTile(key) {
   const t = S.tiles.get(key); if (!t) return;
@@ -818,7 +835,7 @@ function renderEmail() {
   if (!em.lines.length) { box.innerHTML = ''; foot.innerHTML = ''; return; }
   const c = computeEmail();
   const verLabel = o => `${o.meta.setName} #${o.meta.cn}${finLabel(o.finish)} · ${o.have} in stock · ${o.price != null ? money(o.price) : 'no CK price'}`;
-  box.innerHTML = `<table class="etab"><thead><tr><th title="Tick to include">✓</th><th>Qty</th><th>Card</th><th>Version</th><th title="Box locations come later">Box</th><th>Price ea</th><th class="tot">Total</th><th>Notes</th><th></th></tr></thead><tbody>` +
+  box.innerHTML = `<table class="etab"><thead><tr><th title="Tick to include">✓</th><th>Qty</th><th>Card</th><th>Version</th><th title="Where the card is stored (from its original printing)">Box</th><th>Price ea</th><th class="tot">Total</th><th>Notes</th><th></th></tr></thead><tbody>` +
     c.rows.map(r => {
       const l = r.l, o = r.o;
       const name = l.found === false ? `<input type="text" class="en" data-e="name" value="${esc(l.name)}" aria-label="Card name">` : `<span class="ename">${esc(l.name)}</span>`;
@@ -830,7 +847,7 @@ function renderEmail() {
       return `<tr class="${r.cls}" data-i="${r.i}">
         <td>${o ? `<input type="checkbox" data-e="chk" ${l.checked ? 'checked' : ''} aria-label="Include">` : ''}</td>
         <td><input type="text" class="eq" data-e="qty" inputmode="numeric" value="${l.qty}" aria-label="Quantity"></td>
-        <td>${name}</td><td>${ver}</td><td class="muted">—</td><td>${price}</td>
+        <td>${name}</td><td>${ver}</td><td class="box">${o ? boxTag(o.meta.name, '', '—') : '<span class="muted">—</span>'}</td><td>${price}</td>
         <td class="tot">${r.counts ? money(r.lineTotal) : ''}</td>
         <td class="flag">${l.typed ? `<span class="muted">Corrected from "${esc(l.typed)}". </span>` : ''}${esc(r.flag)}${o && r.have < l.qty ? ` <a href="#" data-e="more" class="hint">+ another version</a>` : ''}</td>
         <td><button class="erm" data-e="rm" title="Remove this line" aria-label="Remove line">×</button></td></tr>`;
@@ -838,6 +855,7 @@ function renderEmail() {
   const left = c.totalB != null ? ` <span class="muted">· ${money(Math.max(0, c.totalB - c.total))} of ${money(c.totalB)} budget left</span>` : '';
   foot.innerHTML = `<button data-e="tickall">Tick all in stock</button><span>${c.cards} card${c.cards === 1 ? '' : 's'} · <span class="big">${money(c.total)}</span>${left}</span>
     <button class="primary" data-e="complete" ${c.cards && !S.emailBusy ? '' : 'disabled'}>${S.emailBusy ? 'Saving order…' : 'Complete order'}</button>`;
+  ensureBoxes(c.rows.filter(r => r.o).map(r => r.o.meta.name));
   const red = c.rows.filter(r => r.cls === E_RED).length;
   $('#enote').textContent = `${em.lines.length} line${em.lines.length === 1 ? '' : 's'}, ${red} out of stock.`;
 }
