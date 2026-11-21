@@ -43,6 +43,23 @@ for (const c of rows) {
   if (!prev) kept++;
 }
 for (const rec of Object.values(items)) for (const k in rec) rec[k] = rec[k].v;
-const out = { created: raw.meta?.created_at || '', built: new Date().toISOString(), base: (raw.meta?.base_url || 'https://www.cardkingdom.com/').replace(/\/?$/, '/') + 'mtg/', count: kept, items };
+// mins[folded card name] = the cheapest nonfoil Near Mint retail price among ALL of Card Kingdom's versions of that card
+// (every set, showcase, The List…). Only names whose cheapest version is $10 or more are kept; the app tags a card "Case"
+// when this is at least $19.99. Names are folded like the app does: no accents or capitals, punctuation becomes a space.
+const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const mins = {};
+const seenMin = {};
+for (const c of rows) {
+  if (!c || !c.name) continue;
+  const foil = String(c.is_foil).toLowerCase() === 'true' || /etched|foil/i.test(c.variation || '');
+  if (foil) continue;
+  const cv = c.condition_values || {};
+  const p = cv.nm_price !== undefined ? num(cv.nm_price) : num(c.price_retail);
+  if (!(p > 0)) continue;
+  const k = fold(c.name);
+  if (seenMin[k] === undefined || p < seenMin[k]) seenMin[k] = p;
+}
+for (const k in seenMin) if (seenMin[k] >= 10) mins[k] = seenMin[k];
+const out = { created: raw.meta?.created_at || '', built: new Date().toISOString(), base: (raw.meta?.base_url || 'https://www.cardkingdom.com/').replace(/\/?$/, '/') + 'mtg/', count: kept, mins, items };
 await writeFile(OUT, JSON.stringify(out));
 console.log(`Wrote ${OUT}: ${kept} listings for ${Object.keys(items).length} printings (${noId} without a Scryfall ID skipped)`);
