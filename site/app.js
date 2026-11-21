@@ -1163,13 +1163,42 @@ async function openInbox() {
   if (Date.now() - S.inbox.lastSync > 5 * 60000 && !S.inbox.busy) loadInbox(true);
 }
 
+// A line that could be a card (not a greeting, sentence, sign-off or link). Free-mode emails are plain prose around the list.
+function looksLikeCard(line) {
+  const s = line.trim();
+  if (!s || /[.!?:]$/.test(s) || /@|https?:|www\./i.test(s) || s.split(/\s+/).length > 8) return false;
+  return !/^(hi|hello|hey|dear|thanks|thank|thx|cheers|regards|best|sincerely|please|let me know|sent from|i |i'|we |can |could |would |also|here|my |our |it |this |that |there |just |if |are |is |do |does |have |has |what |when |how )/i.test(s);
+}
+// Free mode (no AI): read name, budgets, foils and the card list out of the customer's own words with the same
+// rules as the paste box. AI-read emails already carry these. Returns {customer, cards, perCardBudget, overallBudget, noBudget, foils, notes, missing, checklist}.
+function mailParse(m) {
+  const d = m.data || {};
+  if (d.mode !== 'text') return { ...d, missing: m.missing || [], checklist: m.checklist };
+  const text = d.text || '';
+  const { info, rest } = extractOrderInfo(text);
+  const noBudget = /\b(no (budget|limit|max|maximum|spending limit)|unlimited|budget (is not|isn'?t) (an issue|a concern))\b/i.test(text);
+  // When the list gives quantities ("2 Sol Ring", "Sol Ring x2"), only those lines are cards, so a sign-off like "Jane" isn't taken for one.
+  const sender = String(d.fromName || '').toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  let cand = rest.split('\n').filter(looksLikeCard).filter(l => !sender.includes(l.trim().toLowerCase()));   // a sign-off with the sender's name isn't a card
+  const withQty = cand.filter(l => /^\s*[-*•]?\s*\d{1,3}\s*[x×]?\s+\S/.test(l) || /\S\s*[x×]\s*\d{1,3}\s*$/i.test(l));
+  if (withQty.length) cand = withQty;
+  const cards = parseWantList(cand.join('\n')).map(c => ({ qty: c.qty, name: c.name, set: c.set }));
+  const out = { customer: info.cust || '', cards, perCardBudget: parseMoney(info.card), overallBudget: parseMoney(info.total), noBudget, foils: info.foil == null ? null : (info.foil ? 'yes' : 'no'), notes: info.notes || '', fromName: d.fromName || '' };
+  out.missing = [];
+  if (!out.customer) out.missing.push('name');
+  if (out.perCardBudget == null && out.overallBudget == null && !noBudget) out.missing.push('budget');
+  if (!out.foils) out.missing.push('foils');
+  out.checklist = out.missing.length ? 'needed' : 'complete';
+  return out;
+}
+
 function renderInbox() {
   const I = S.inbox, box = $('#einbox'); if (!box) return;
   const ago = I.lastSync ? new Date(I.lastSync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet';
   const rows = I.emails.map(m => {
-    const d = m.data || {}, miss = m.missing || [];
-    const chip = m.checklist === 'complete' ? '<span class="chip ok">Checklist complete</span>'
-      : m.checklist === 'error' ? '<span class="chip err">Could not read</span>'
+    const d = mailParse(m), miss = d.missing || [];
+    const chip = d.checklist === 'complete' ? '<span class="chip ok">Checklist complete</span>'
+      : d.checklist === 'error' ? '<span class="chip err">Could not read</span>'
       : `<span class="chip need">Checklist needed</span>${miss.length ? ` <span class="muted">missing: ${esc(miss.join(', '))}</span>` : ''}`;
     const bits = [];
     if (d.cards) bits.push(`${d.cards.reduce((n, c) => n + c.qty, 0)} card${d.cards.length === 1 && d.cards[0].qty === 1 ? '' : 's'}`);
@@ -1179,11 +1208,11 @@ function renderInbox() {
     if (d.foils) bits.push(d.foils === 'yes' ? 'foils OK' : 'no foils');
     const when = m.received ? new Date(m.received).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
     return `<div class="irow${S.email.thread === m.thread ? ' cur' : ''}" data-t="${esc(m.thread)}">
-      <div class="imain"><b>${esc(d.customer || m.from || 'Unknown sender')}</b> <span class="muted">${esc(m.subject)} · ${esc(when)}</span><br>${chip} <span class="muted">${d.error ? esc(d.error) : esc(bits.join(' · '))}</span></div>
+      <div class="imain"><b>${esc(d.customer || d.fromName || m.from || 'Unknown sender')}</b> <span class="muted">${esc(m.subject)} · ${esc(when)}</span><br>${chip} <span class="muted">${d.error ? esc(d.error) : esc(bits.join(' · '))}</span></div>
       <div class="iact"><button data-i="open" ${d.cards && d.cards.length ? '' : 'disabled'}>Open</button><a href="${esc(gmailUrl(m.thread))}" target="_blank" rel="noopener" class="hint">Gmail ↗</a><button data-i="done" title="Remove from To do and label it complete in Gmail">Mark complete</button></div></div>`;
   }).join('');
   box.innerHTML = `<div class="ihead"><b>To do: customer emails</b> <span class="muted">${I.emails.length} waiting · checked ${esc(ago)}</span>
-    <button data-i="sync" ${I.busy ? 'disabled' : ''}>${I.busy ? 'Checking Gmail…' : 'Refresh'}</button>${I.hasKey ? '' : '<button data-i="key" class="primary">Set up AI key</button>'}</div>
+    <button data-i="sync" ${I.busy ? 'disabled' : ''}>${I.busy ? 'Checking Gmail…' : 'Refresh'}</button>${I.hasKey ? '' : '<span class="muted" title="Emails are read by the app with simple rules (no cost). Name, budget and foils work best written like: name: Jane · budget: $50 · no foils">free reading</span>'}</div>
     ${I.syncError ? `<p class="note err">${esc(I.syncError)}</p>` : ''}
     ${rows || `<p class="note">${I.loaded ? 'No emails waiting. Label an email "lists" in Gmail and it shows up here.' : 'Loading…'}</p>`}`;
 }
@@ -1217,13 +1246,13 @@ async function onInboxClick(e) {
 
 // Fill the Email orders form from a parsed email, then run the normal list check.
 async function loadEmailOrder(m) {
-  const d = m.data || {};
+  const d = mailParse(m);
   if ((S.email.lines.length || S.email.text.trim()) && S.email.thread !== m.thread && !confirm('Replace the order you are working on with this email?')) return;
   const line = c => `${c.qty} ${c.name}` + (/^[a-z0-9]{2,5}$/i.test(c.set || '') ? ` (${c.set})` : '');
-  S.email = { ...emailBlank(), thread: m.thread, subject: m.subject, cust: d.customer || '', card: d.perCardBudget != null ? String(d.perCardBudget) : '', total: d.overallBudget != null ? String(d.overallBudget) : '',
+  S.email = { ...emailBlank(), thread: m.thread, subject: m.subject, cust: d.customer || d.fromName || '', card: d.perCardBudget != null ? String(d.perCardBudget) : '', total: d.overallBudget != null ? String(d.overallBudget) : '',
     foil: d.foils === 'yes', notes: d.notes || '', text: (d.cards || []).map(line).join('\n') };
   saveEmail(); emailFormOut(); renderInbox();
-  const miss = (m.missing || []);
+  const miss = d.missing || [];
   if (miss.length) toast('Checklist still needed: ' + miss.join(', '));
   await checkEmailList();
 }
