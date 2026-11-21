@@ -10,8 +10,12 @@
  *   Missing    cards the store is sure it's missing
  *   Orders     every completed order with prices (for finding and reversing orders)
  *
- * Optional: to require a shared store code later, set a Script Property named
- * ACCESS_CODE (Project Settings > Script Properties). The app will then ask for it.
+ *   Account    the store's one username + salted password hash (created by the app's first-run "Create store profile")
+ *
+ * Sign-in: the app sends a long random session token (kept for years, see SESSION_IDLE_MS); only its hash is stored,
+ * one Script Property per device (S_...). The Scryfall extension instead sends the extension key (Script Property
+ * EXT_KEY, shown in the app under Account). If the password is forgotten, delete row 2 of the Account tab and
+ * create the profile again in the app (that also signs out every device).
  */
 
 var INV = 'Inventory';
@@ -27,6 +31,13 @@ var MISS_HEAD = ['oracle_id', 'name', 'scryfall_id', 'set', 'set_name', 'collect
 var ORD = 'Orders';
 var ORD_HEAD = ['order', 'time', 'who', 'customer', 'total', 'cards', 'items', 'reversed', 'reversed_by'];
 
+var ACCT = 'Account';
+var ACCT_HEAD = ['username', 'salt', 'password_hash', 'created', 'changed'];
+var PUBLIC_ACTIONS = { authStatus: 1, setup: 1, login: 1 };
+var EXT_ACTIONS = { inventory: 1, changes: 1, adjust: 1, lookup: 1, missing: 1, missingAdd: 1, missingRemove: 1 };
+var SESSION_IDLE_MS = 3650 * 86400000;   // a device stays signed in until it has gone unused for ~10 years
+var HASH_ROUNDS = 400;
+
 function doGet() {
   return json_({ ok: true, service: 'card-inventory', time: new Date().toISOString() });
 }
@@ -36,10 +47,15 @@ function doPost(e) {
   try { body = JSON.parse((e && e.postData && e.postData.contents) || '{}'); }
   catch (err) { return json_({ ok: false, error: 'Bad request' }); }
   try {
-    var code = PropertiesService.getScriptProperties().getProperty('ACCESS_CODE');
-    if (code && String(body.code || '') !== code) return json_({ ok: false, error: 'Wrong store code', needCode: true });
     var fn = ACTIONS[body.action];
     if (!fn) return json_({ ok: false, error: 'Unknown action' });
+    // Everything except signing in needs the store account's session token, or (for the few things the Scryfall
+    // extension does) the extension key. The extension's changes are always logged as "Scryfall".
+    if (!PUBLIC_ACTIONS[body.action]) {
+      var who = authorize_(body);
+      if (!who) return json_({ ok: false, needLogin: true, setup: !acct_(), error: 'Not signed in. In the app, sign in. In the Scryfall extension, enter the extension key (app: Account > Extension key).' });
+      if (who === 'ext') body.who = 'Scryfall';
+    }
     return json_(fn(body));
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err) });
@@ -298,7 +314,135 @@ var ACTIONS = {
       return { ok: true, removed: !!row };
     } finally { lock.releaseLock(); }
   },
+
+  /* ----- the store account ----- */
+
+  // Does a store profile exist yet? (The app shows "Create store profile" when not.)
+  authStatus: function () { return { ok: true, hasAccount: !!acct_() }; },
+
+  // First run only: create the store's username and password. Stores a salted hash, never the password itself.
+  setup: function (b) {
+    var user = clean_(b.username, 40), pw = String(b.password || '');
+    if (user.length < 3) throw new Error('The username needs at least 3 characters');
+    if (pw.length < 8) throw new Error('The password needs at least 8 characters');
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(25000)) throw new Error('Busy, try again');
+    try {
+      if (acct_()) throw new Error('A store profile already exists. Sign in instead');
+      var salt = Utilities.getUuid(), now = new Date();
+      acctTab_().getRange(2, 1, 1, ACCT_HEAD.length).setValues([[user, salt, hash_(salt, pw), now, now]]);
+      var props = PropertiesService.getScriptProperties();
+      if (!props.getProperty('EXT_KEY')) props.setProperty('EXT_KEY', newKey_());
+      dropSessions_();
+      return { ok: true, token: newSession_(), username: user };
+    } finally { lock.releaseLock(); }
+  },
+
+  login: function (b) {
+    var props = PropertiesService.getScriptProperties();
+    var a = acct_();
+    if (!a) return { ok: false, needLogin: true, setup: true, error: 'There is no store profile yet' };
+    var f = {}; try { f = JSON.parse(props.getProperty('LOGIN_FAILS') || '{}'); } catch (e) { f = {}; }
+    if (f.until && Date.now() < f.until) throw new Error('Too many wrong tries. Wait a few minutes and try again');
+    var ok = String(b.username || '').trim().toLowerCase() === a.username.toLowerCase() && hash_(a.salt, String(b.password || '')) === a.hash;
+    if (!ok) {
+      f.n = (f.until ? 0 : Number(f.n) || 0) + 1; f.until = 0;
+      if (f.n >= 10) { f.until = Date.now() + 15 * 60000; f.n = 0; }
+      props.setProperty('LOGIN_FAILS', JSON.stringify(f));
+      Utilities.sleep(700);
+      throw new Error('Wrong username or password');
+    }
+    props.deleteProperty('LOGIN_FAILS');
+    return { ok: true, token: newSession_(), username: a.username };
+  },
+
+  // Sign this device out.
+  logout: function (b) {
+    if (b.token) PropertiesService.getScriptProperties().deleteProperty(sessionKey_(b.token));
+    return { ok: true };
+  },
+
+  // Change the password (needs the current one). Every other device is signed out; this one gets a fresh token.
+  changePassword: function (b) {
+    var a = acct_(), pw = String(b.newPassword || '');
+    if (!a) throw new Error('There is no store profile');
+    if (hash_(a.salt, String(b.password || '')) !== a.hash) throw new Error('The current password is wrong');
+    if (pw.length < 8) throw new Error('The new password needs at least 8 characters');
+    var salt = Utilities.getUuid();
+    acctTab_().getRange(2, 2, 1, 2).setValues([[salt, hash_(salt, pw)]]);
+    acctTab_().getRange(2, 5, 1, 1).setValues([[new Date()]]);
+    dropSessions_();
+    return { ok: true, token: newSession_(), username: a.username };
+  },
+
+  // The key the Scryfall extension uses (typed once into the extension's popup).
+  extKey: function () {
+    var props = PropertiesService.getScriptProperties(), k = props.getProperty('EXT_KEY');
+    if (!k) { k = newKey_(); props.setProperty('EXT_KEY', k); }
+    return { ok: true, key: k };
+  },
+  newExtKey: function () {
+    var k = newKey_(); PropertiesService.getScriptProperties().setProperty('EXT_KEY', k);
+    return { ok: true, key: k };
+  },
 };
+
+/* ---------- account helpers ---------- */
+
+function acctTab_() {
+  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(ACCT);
+  if (!sh) {
+    sh = ss.insertSheet(ACCT);
+    sh.getRange(1, 1, 1, ACCT_HEAD.length).setValues([ACCT_HEAD]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('A:C').setNumberFormat('@');
+  }
+  return sh;
+}
+function acct_() {
+  var sh = SpreadsheetApp.getActive().getSheetByName(ACCT);
+  if (!sh || sh.getLastRow() < 2) return null;
+  var r = sh.getRange(2, 1, 1, 3).getValues()[0];
+  return r[0] && r[2] ? { username: String(r[0]), salt: String(r[1]), hash: String(r[2]) } : null;
+}
+function sha_(s) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8)); }
+function hash_(salt, pw) { var h = salt + ':' + pw; for (var i = 0; i < HASH_ROUNDS; i++) h = sha_(h + ':' + salt); return h; }
+function newKey_() { return Utilities.getUuid().replace(/-/g, '').slice(0, 24); }
+
+// One Script Property per device (S_<hash of its token>) holding when it was last used, so two devices signing
+// in or being used at the same moment can never overwrite each other.
+function sessionKey_(token) { return 'S_' + sha_('session:' + String(token)).replace(/[^A-Za-z0-9]/g, '').slice(0, 40); }
+function newSession_() {
+  var props = PropertiesService.getScriptProperties();
+  var token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  props.setProperty(sessionKey_(token), String(Date.now()));
+  var keys = props.getKeys().filter(function (k) { return k.indexOf('S_') === 0; });
+  if (keys.length > 300) {   // keep the 300 most recently used devices
+    keys.map(function (k) { return [k, Number(props.getProperty(k)) || 0]; }).sort(function (a, b) { return a[1] - b[1]; })
+      .slice(0, keys.length - 300).forEach(function (x) { props.deleteProperty(x[0]); });
+  }
+  return token;
+}
+function dropSessions_() {
+  var props = PropertiesService.getScriptProperties();
+  props.getKeys().forEach(function (k) { if (k.indexOf('S_') === 0) props.deleteProperty(k); });
+}
+// 'user' (signed-in app), 'ext' (Scryfall extension key, limited actions) or '' (neither).
+function authorize_(b) {
+  if (!acct_()) return '';
+  var props = PropertiesService.getScriptProperties();
+  if (b.token) {
+    var key = sessionKey_(b.token), v = Number(props.getProperty(key));
+    if (v) {
+      var now = Date.now();
+      if (now - v > SESSION_IDLE_MS) props.deleteProperty(key);
+      else { if (now - v > 12 * 3600000) props.setProperty(key, String(now)); return 'user'; }
+    }
+  }
+  var ext = props.getProperty('EXT_KEY');
+  if (ext && b.code && String(b.code) === ext && EXT_ACTIONS[b.action]) return 'ext';
+  return '';
+}
 
 function missTab_() {
   var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(MISS);
