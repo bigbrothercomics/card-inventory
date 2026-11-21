@@ -10,6 +10,8 @@
  *   Missing    cards the store is sure it's missing
  *   Orders     every completed order with prices (for finding and reversing orders)
  *
+ *   EmailOrders  customer want-list emails (Gmail label "lists") read by Claude, with To do / done and checklist status.
+ *              Needs the Anthropic key (Script Property ANTHROPIC_KEY, set from the app) and one run of setupEmail() for Gmail access + the timer.
  *   Account    the store's one username + salted password hash (created by the app's first-run "Create store profile")
  *
  * Sign-in: the app sends a long random session token (kept for years, see SESSION_IDLE_MS); only its hash is stored,
@@ -198,8 +200,36 @@ var ACTIONS = {
         rec.push([l.key, n, l.price, it.name, it.set, it.setName, it.cn]);
       });
       if (rec.length) ordTab_().appendRow([String(order), now, who, customer, Math.round(total * 100) / 100, cards, itemsJson_(rec), '', '']);
-      return { ok: true, seq: seq, order: order, items: items, customerN: customerN };
+      // An order made from a customer email closes that email (Gmail label "complete") so it leaves the To do list.
+      // A Gmail hiccup never undoes the sale.
+      var emailDone = false;
+      if (b.emailThread) { try { markEmailDone_(String(b.emailThread), who, order); emailDone = true; } catch (e) {} }
+      return { ok: true, seq: seq, order: order, items: items, customerN: customerN, emailDone: emailDone };
     });
+  },
+
+  /* ----- customer want-list emails (Gmail label "lists") ----- */
+
+  // The To do list (no Gmail or AI work; just what the last sync stored).
+  emails: function () { return emailsReply_(); },
+
+  // Look at Gmail now: new/changed "lists" threads are read by the AI, finished ones leave the To do list.
+  emailSync: function () { syncEmails_(8); return emailsReply_(); },
+
+  // Mark an email complete in the app (and put the Gmail "complete" label on it).
+  emailDone: function (b) {
+    var id = String(b.thread || '');
+    if (!id) throw new Error('Which email?');
+    var gm = markEmailDone_(id, b.who, '');
+    return Object.assign(emailsReply_(), { gmail: gm });
+  },
+
+  // Store the Anthropic API key (used only to read emails). Only a signed-in app can set it; it is never sent back.
+  emailSetKey: function (b) {
+    var k = String(b.key || '').trim();
+    if (!/^sk-ant-[A-Za-z0-9_\-]{20,}$/.test(k)) throw new Error('That does not look like an Anthropic API key (it starts with sk-ant-)');
+    PropertiesService.getScriptProperties().setProperty('ANTHROPIC_KEY', k);
+    return Object.assign(emailsReply_(), { saved: true });
   },
 
   // Past orders, newest first, filtered by time (ISO from/to), text (customer, staff name or order number)
@@ -377,6 +407,201 @@ var ACTIONS = {
   },
 
 };
+
+/* ---------- customer want-list emails ---------- */
+// Gmail threads labelled "lists" are read (whole thread, so replies to our checklist questions count) by Claude through the
+// Anthropic API, and kept in the EmailOrders tab as To do. Done = labelled "complete" in Gmail, or completed in the app (which
+// then puts the "complete" label on the thread). This code only reads mail and adds/removes labels: it never sends or drafts.
+var EML = 'EmailOrders';
+var EML_HEAD = ['thread', 'subject', 'from', 'received', 'status', 'checklist', 'missing', 'parsed', 'msg_count', 'updated', 'done_at', 'done_by'];
+var LISTS_LABEL = 'lists', DONE_LABEL = 'complete';
+var EMAIL_MODEL = 'claude-haiku-5-5';
+var EMAIL_PROMPT = [
+  'You read emails from customers of a Magic: The Gathering card store who send a want list (the cards they want to buy).',
+  'You get one email thread: the customer\'s first email and any later messages, each marked FROM THE CUSTOMER or FROM THE STORE.',
+  'Our store asks every customer for a checklist: their name, their budget (per card and/or overall), and whether foils are OK.',
+  'Combine the whole thread. A later answer from the customer replaces an earlier one. Messages from the store only give context (the questions asked); never take facts from them except to understand a short reply like "yes" or "no".',
+  'Reply with ONLY one JSON object, no other text, in exactly this shape:',
+  '{"isWantList":true|false,"customer":string|null,"cards":[{"qty":number,"name":string,"set":string|null}],"perCardBudget":number|null,"overallBudget":number|null,"noBudget":true|false,"foils":"yes"|"no"|null,"notes":string|null}',
+  'Rules:',
+  '- customer: the customer\'s name as they gave it (a "name:" line, "for Jane", or their sign-off/signature). null if the message body never says it. Do not use an email address.',
+  '- cards: every card wanted, one entry per card name, qty defaults to 1. Use the real Magic card name, fixing obvious typos only when you are sure. Put a set code or set name in "set" only if the customer named one for that card. Do not include basic lands unless the customer asked for them. Do not include things that are not cards (greetings, budgets, questions).',
+  '- perCardBudget: the most they will pay for one card, in dollars (e.g. "no more than $2 a card" = 2). overallBudget: the most for the whole order. null when not stated.',
+  '- noBudget: true only if the customer clearly says they have no budget limit.',
+  '- foils: "yes" if foils are OK/wanted, "no" if they do not want foils, null if they never said.',
+  '- notes: anything else the store should know (shipping, condition, deadlines), short. null if none.',
+  '- Never guess. If something is not stated, use null.',
+  '- isWantList is false if the thread has no list of cards at all.'
+].join('\n');
+
+function emlTab_() {
+  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(EML);
+  if (!sh) {
+    sh = ss.insertSheet(EML);
+    sh.getRange(1, 1, 1, EML_HEAD.length).setValues([EML_HEAD]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('A:A').setNumberFormat('@');
+    sh.getRange('G:H').setNumberFormat('@');
+  }
+  return sh;
+}
+
+function emlRows_(sh) {
+  var n = sh.getLastRow() - 1, out = [];
+  var v = n > 0 ? sh.getRange(2, 1, n, EML_HEAD.length).getValues() : [];
+  v.forEach(function (r, i) {
+    if (!r[0]) return;
+    out.push({ row: i + 2, thread: String(r[0]), subject: String(r[1]), from: String(r[2]), received: r[3], status: String(r[4]), checklist: String(r[5]), missing: String(r[6]), parsed: String(r[7]), msgCount: Number(r[8]) || 0 });
+  });
+  return out;
+}
+
+function emailsReply_() {
+  var props = PropertiesService.getScriptProperties();
+  var list = emlRows_(emlTab_()).filter(function (r) { return r.status === 'todo'; }).map(function (r) {
+    var data = null, missing = [];
+    try { data = JSON.parse(r.parsed || 'null'); } catch (e) {}
+    try { missing = JSON.parse(r.missing || '[]'); } catch (e) {}
+    return { thread: r.thread, subject: r.subject, from: r.from, received: r.received instanceof Date ? r.received.toISOString() : String(r.received), checklist: r.checklist, missing: missing, data: data };
+  });
+  list.sort(function (a, b) { return String(b.received).localeCompare(String(a.received)); });
+  return { ok: true, emails: list, hasKey: !!props.getProperty('ANTHROPIC_KEY'), lastSync: Number(props.getProperty('EMAIL_SYNC_AT')) || 0, syncError: props.getProperty('EMAIL_SYNC_ERR') || '' };
+}
+
+// The text sent to the AI: each message with who sent it, quoted earlier mail stripped.
+function threadText_(t) {
+  var me = '';
+  try { me = String(Session.getEffectiveUser().getEmail()).toLowerCase(); } catch (e) {}
+  var msgs = t.getMessages(), parts = [];
+  msgs.forEach(function (m, i) {
+    var from = m.getFrom(), mine = me && from.toLowerCase().indexOf(me) >= 0;
+    var body = String(m.getPlainBody() || '').replace(/\r/g, '');
+    body = body.replace(/\n\s*On [^\n]{5,200}\n?[^\n]{0,100}wrote:[\s\S]*$/, '').replace(/\n-{2,}\s*Original Message[\s\S]*$/i, '');
+    body = body.split('\n').filter(function (l) { return l.charAt(0) !== '>'; }).join('\n').trim().slice(0, 8000);
+    parts.push('--- Message ' + (i + 1) + ' of ' + msgs.length + ' | ' + (mine ? 'FROM THE STORE' : 'FROM THE CUSTOMER') + ' (' + from.replace(/<[^>]*>/g, '').trim() + ') | ' + m.getDate().toISOString() + '\n' + body);
+  });
+  var text = 'Subject: ' + t.getFirstMessageSubject() + '\n\n' + parts.join('\n\n');
+  return text.length > 30000 ? text.slice(0, 10000) + '\n...\n' + text.slice(-20000) : text;
+}
+
+function askModel_(key, text) {
+  var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    payload: JSON.stringify({ model: EMAIL_MODEL, max_tokens: 4000, system: EMAIL_PROMPT, messages: [{ role: 'user', content: text }] })
+  });
+  var code = res.getResponseCode(), body = res.getContentText();
+  if (code !== 200) throw new Error('The AI service returned ' + code + ': ' + body.slice(0, 160));
+  var j = JSON.parse(body), out = (j.content || []).map(function (c) { return c.text || ''; }).join('');
+  var m = out.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('The AI reply was not understood');
+  return JSON.parse(m[0]);
+}
+
+// Clean the AI's answer and decide the checklist status here in code (not by the AI):
+// complete = a name, a foil answer, and a budget (per-card, overall, or "no budget") are all in the thread.
+function emailData_(p) {
+  var num = function (v) { var n = Number(v); return v == null || v === '' || !isFinite(n) || n < 0 ? null : Math.round(n * 100) / 100; };
+  var cards = (Array.isArray(p.cards) ? p.cards : []).slice(0, 300).map(function (c) {
+    return { qty: Math.min(999, Math.max(1, Math.round(Number(c && c.qty) || 1))), name: clean_(c && c.name, 120), set: clean_(c && c.set, 40) };
+  }).filter(function (c) { return c.name; });
+  var d = {
+    isWantList: !!p.isWantList && cards.length > 0, customer: clean_(p.customer, 80), cards: cards,
+    perCardBudget: num(p.perCardBudget), overallBudget: num(p.overallBudget), noBudget: p.noBudget === true,
+    foils: p.foils === 'yes' || p.foils === 'no' ? p.foils : null, notes: clean_(p.notes, 400)
+  };
+  var missing = [];
+  if (!d.customer) missing.push('name');
+  if (d.perCardBudget == null && d.overallBudget == null && !d.noBudget) missing.push('budget');
+  if (!d.foils) missing.push('foils');
+  return { data: d, missing: missing, checklist: missing.length ? 'needed' : 'complete' };
+}
+
+function syncEmails_(cap) {
+  var props = PropertiesService.getScriptProperties();
+  var started = Number(props.getProperty('EMAIL_SYNC_RUN')) || 0;
+  if (Date.now() - started < 4 * 60000) return;     // another sync is still running
+  props.setProperty('EMAIL_SYNC_RUN', String(Date.now()));
+  try {
+    var key = props.getProperty('ANTHROPIC_KEY');
+    var lists = GmailApp.getUserLabelByName(LISTS_LABEL);
+    if (!lists) throw new Error('There is no Gmail label named "' + LISTS_LABEL + '"');
+    var doneLabel = GmailApp.getUserLabelByName(DONE_LABEL) || GmailApp.createLabel(DONE_LABEL);
+    var doneIds = {};
+    doneLabel.getThreads(0, 150).forEach(function (t) { doneIds[t.getId()] = 1; });
+    var sh = emlTab_(), byId = {};
+    emlRows_(sh).forEach(function (r) { byId[r.thread] = r; });
+    var seen = {}, parsed = 0, problem = '';
+    var put = function (r, vals) { if (r) sh.getRange(r.row, 1, 1, EML_HEAD.length).setValues([vals]); else sh.appendRow(vals); };
+    lists.getThreads(0, 60).forEach(function (t) {
+      var id = t.getId(), r = byId[id], now = new Date();
+      seen[id] = 1;
+      if (r && r.status === 'done') return;
+      if (doneIds[id]) {                              // labelled "complete" in Gmail
+        put(r, [id, r ? r.subject : t.getFirstMessageSubject(), r ? r.from : '', r ? r.received : t.getLastMessageDate(), 'done', r ? r.checklist : '', r ? r.missing : '', r ? r.parsed : '', r ? r.msgCount : 0, now, now, 'Gmail']);
+        return;
+      }
+      var n = t.getMessageCount();
+      if (r && r.msgCount === n) return;              // nothing new in this thread
+      if (parsed >= cap) return;
+      if (!key) { problem = 'Add the Anthropic API key so emails can be read.'; return; }
+      parsed++;
+      var from = '', msgs = t.getMessages();
+      for (var i = 0; i < msgs.length; i++) { var f = msgs[i].getFrom(); if (f.toLowerCase().indexOf(String(Session.getEffectiveUser().getEmail()).toLowerCase()) < 0) { from = f.replace(/<[^>]*>/g, '').trim(); break; } }
+      try {
+        var res = emailData_(askModel_(key, threadText_(t)));
+        put(r, [id, t.getFirstMessageSubject(), from, t.getLastMessageDate(), 'todo', res.checklist, JSON.stringify(res.missing), JSON.stringify(res.data), n, now, '', '']);
+      } catch (e) {
+        problem = String(e.message || e);
+        put(r, [id, t.getFirstMessageSubject(), from, t.getLastMessageDate(), 'todo', 'error', '[]', JSON.stringify({ error: problem }), 0, now, '', '']);
+      }
+    });
+    // To do emails that Gmail no longer lists under "lists" (label removed, or older than the newest 60): check them directly.
+    var checked = 0;
+    Object.keys(byId).forEach(function (id) {
+      var r = byId[id];
+      if (r.status !== 'todo' || seen[id] || checked >= 15) return;
+      checked++;
+      try {
+        var t = GmailApp.getThreadById(id), names = t ? t.getLabels().map(function (l) { return l.getName(); }) : [];
+        if (!t || names.indexOf(DONE_LABEL) >= 0 || names.indexOf(LISTS_LABEL) < 0) {
+          var now2 = new Date();
+          sh.getRange(r.row, 5).setValue('done'); sh.getRange(r.row, 11, 1, 2).setValues([[now2, 'Gmail']]);
+        }
+      } catch (e) {}
+    });
+    props.setProperty('EMAIL_SYNC_AT', String(Date.now()));
+    if (problem) props.setProperty('EMAIL_SYNC_ERR', problem); else props.deleteProperty('EMAIL_SYNC_ERR');
+  } catch (e) {
+    props.setProperty('EMAIL_SYNC_ERR', String(e.message || e));
+  } finally { props.deleteProperty('EMAIL_SYNC_RUN'); }
+}
+
+// Mark an email done in the sheet and put the Gmail "complete" label on it. Returns 'ok' or what went wrong with Gmail.
+function markEmailDone_(id, who, order) {
+  var sh = emlTab_(), row = findRow_(sh, id), now = new Date(), gm = 'ok';
+  if (row) { sh.getRange(row, 5).setValue('done'); sh.getRange(row, 11, 1, 2).setValues([[now, clean_(who, 60)]]); }
+  else sh.appendRow([id, '', '', now, 'done', '', '', '', 0, now, now, clean_(who, 60)]);
+  try {
+    var t = GmailApp.getThreadById(id);
+    if (t) t.addLabel(GmailApp.getUserLabelByName(DONE_LABEL) || GmailApp.createLabel(DONE_LABEL)); else gm = 'The Gmail thread was not found';
+  } catch (e) { gm = String(e.message || e); }
+  return gm;
+}
+
+// Time-driven trigger (every 10 minutes).
+function emailTimer_() { syncEmails_(10); }
+
+// Run this once from the Apps Script editor (Run > setupEmail): Google asks to allow Gmail access, the labels are
+// created if missing, and the 10-minute timer is installed.
+function setupEmail() {
+  if (!GmailApp.getUserLabelByName(LISTS_LABEL)) GmailApp.createLabel(LISTS_LABEL);
+  if (!GmailApp.getUserLabelByName(DONE_LABEL)) GmailApp.createLabel(DONE_LABEL);
+  emlTab_();
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'emailTimer_') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('emailTimer_').timeBased().everyMinutes(10).create();
+  return 'Email timer installed';
+}
 
 /* ---------- account helpers ---------- */
 
