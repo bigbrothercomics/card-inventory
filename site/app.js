@@ -717,7 +717,35 @@ function extractOrderInfo(text) {
   const YES = /\b(yes|y|ok|okay|fine|sure|allowed|include|including|incl|true|good|accept|accepted|please)\b/;
   const NO = /\b(no|n|not|none|without|exclude|excluding|false|nope|dont|don't|never)\b/;
   const amount = s => { const m = s.match(/\$\s*(\d+(?:\.\d{1,2})?)/) || s.match(/(\d+(?:\.\d{1,2})?)\s*(?:\$|dollars?|usd|bucks)/) || s.match(/(?:^|[\s:=])(\d+(?:\.\d{1,2})?)\s*$/) || s.match(/[:=]\s*(\d+(?:\.\d{1,2})?)/); return m ? m[1] : null; };
-  for (const raw of String(text || '').split(/\r?\n/)) {
+  // Answers to our checklist given by number without repeating the questions:
+  //   "1. Yes it is!" (foil OK?) · "2. No per-card budget" · "3. Overall budget I would say is $350"
+  // Our template asks 1) foils 2) per-card budget 3) overall budget. A numbered line only counts when its text looks like that
+  // answer, and only when at least two such answers are found (so "1. No Mercy" in a numbered card list isn't taken for "no foils").
+  const rawLines = String(text || '').split(/\r?\n/), numbered = [], used = new Set();
+  rawLines.forEach((raw, i) => {
+    const m = raw.match(/^\s*(?:[-*•]+\s*)?([123])\s*[.):\-–]\s*(.+)$/); if (!m) return;
+    const k = +m[1], t = m[2].trim(), f = fold(t).replace(/\s+/g, ' ');
+    if (k === 1) {
+      if (t.split(/\s+/).length > 10) return;
+      if (/^(yes|yep|yeah|yup|sure|ok|okay|fine|absolutely|definitely|of course|that'?s (fine|ok|okay)|that is (fine|ok|okay)|it is|it'?s (ok|okay|fine)|foils? (is |are )?(ok|okay|fine|yes|great))\b/.test(f)) numbered.push({ i, k, foil: true });
+      else if (/^(no|nope|nah|not really|please no|don'?t|no foils)\b/.test(f)) numbered.push({ i, k, foil: false });
+      return;
+    }
+    const neg = /^(no|none|nothing|n\/a|na|nope|not really)\b/.test(f) || /\bno (per[- ]?card |overall |total )?(budget|limit|max|maximum)\b/.test(f);
+    const amt = amount(t);
+    const talks = /\b(budget|card|each|per|overall|total|limit|spend|spending)\b|\$/.test(f) || /^\$?\d+(\.\d{1,2})?$/.test(f);
+    if (!neg && !(amt != null && talks)) return;
+    const slot = /\b(overall|total|whole|entire)\b/.test(f) ? 'total' : /\b(per|each|a card|single|individual)\b/.test(f) ? 'card' : (k === 2 ? 'card' : 'total');
+    numbered.push({ i, k, slot, amt: neg ? null : amt, neg });
+  });
+  if (numbered.length >= 2) numbered.forEach(a => {
+    used.add(a.i);
+    if (a.foil !== undefined) info.foil = a.foil;
+    else if (a.neg) { if (a.slot === 'total') info.noBudget = true; }
+    else info[a.slot] = a.amt;
+  });
+  for (const [ri, raw] of rawLines.entries()) {
+    if (used.has(ri)) continue;
     const line = raw.replace(/^\s*(?:[-*•·>]+)\s*/, '').trim();
     const s = fold(line).replace(/\s+/g, ' ');
     // A card line ("2 sol ring") never has a $ amount; leave those alone.
@@ -727,7 +755,7 @@ function extractOrderInfo(text) {
     if (!cardish && (m = line.match(/^\s*notes?\s*[:=\-–]\s*(.+)$/i))) { info.notes = m[1].trim(); continue; }
     // A foil-preference line is only "foil(s)" plus yes/no-type words ("no foils", "foils: ok", "foils are fine"). A card line that
     // mentions foil ("Sol Ring (foil)", "foil Sol Ring") is a request about that card, so it stays in the list.
-    if (!cardish && /\bfoils?\b/.test(s) && s.split(' ').length <= 8 && s.replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter(Boolean).every(w => FOIL_PREF_WORDS.has(w))) { info.foil = !NO.test(s) && (YES.test(s) || !/[:=]/.test(s)); continue; }
+    if (!cardish && !/\?\s*$/.test(line) && /\bfoils?\b/.test(s) && s.split(' ').length <= 8 && s.replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter(Boolean).every(w => FOIL_PREF_WORDS.has(w))) { info.foil = !NO.test(s) && (YES.test(s) || !/[:=]/.test(s)); continue; }
     if (!cardish && /\b(ck|card ?kingdom)\b/.test(s) && s.split(' ').length <= 8) continue;   // "CK pricing: yes" lines: not a card, nothing to fill in
     if (!cardish && /\b(budget|total|overall|max|maximum|limit|spend|spending|cap|up to|per|each|apiece)\b|\$|\bdollars?\b/.test(s) && amount(s) != null) {
       const per = /\b(per|each|ea|a card|single|singles|individual|apiece)\b|\/\s*(card|ea|each)\b|\bcard budget\b/.test(s);
@@ -745,7 +773,7 @@ function extractOrderInfo(text) {
 function parseWantList(text) {
   const out = [];
   for (let raw of String(text || '').split(/\r?\n/)) {
-    let s = raw.replace(/^\s*(?:[-*•·>]+|SB:)\s*/i, '').replace(/\s+\*[FE]\*\s*$/i, '').trim();
+    let s = raw.replace(/^\s*(?:[-*•·>]+|SB:)\s*/i, '').replace(/^\s*\d{1,3}[.)]\s+(?=\S)/, '').replace(/\s+\*[FE]\*\s*$/i, '').trim();   // "1. Sol Ring": list numbering, not a quantity
     if (!s || !/[a-z]/i.test(s) || /:\s*$/.test(s)) continue;                    // blank lines, headings like "Creatures:"
     if (/^(deck|sideboard|commander|maybeboard|companion|total|thanks|thank you)\b/i.test(s) && !/\d/.test(s)) continue;
     let qty = 1, m;
@@ -1228,7 +1256,7 @@ function mailParse(m) {
   const d = m.data || {};
   const text = d.text || '';
   const { info, rest } = extractOrderInfo(text);
-  const noBudget = /\b(no (budget|limit|max|maximum|spending limit)|unlimited|budget (is not|isn'?t) (an issue|a concern))\b/i.test(text);
+  const noBudget = !!info.noBudget || /\b(no (budget|limit|max|maximum|spending limit)|unlimited|budget (is not|isn'?t) (an issue|a concern))\b/i.test(text);
   // When the list gives quantities ("2 Sol Ring", "Sol Ring x2"), only those lines are cards, so a sign-off like "Jane" isn't taken for one.
   // A signature ("Jordan", "- James") is not a card, whatever the sender's Gmail name says. Dropped: the 1-2 word line right after
   // a closing ("Thanks,"), the last line when it stands alone after a blank line or starts with a dash, and any line that is the
@@ -1236,6 +1264,22 @@ function mailParse(m) {
   const closing = /^(thanks|thank you|thx|ty|cheers|regards|kind regards|best regards|best|sincerely|many thanks|thanks so much|thank you so much|much appreciated|appreciate it|talk soon|take care|respectfully|have a good one|have a great day)[\s,.!-]*$/i;
   const plain = s => /^[-–—~]*\s*[A-Za-z][A-Za-z'’.-]*(?:\s+[A-Za-z][A-Za-z'’.-]*)?[,.!]?$/.test(s.trim());
   const rl = rest.split('\n'), sig = new Set(), idx = stockIndex();
+  // "I will amend the previous list to exclude the following cards:" + the lines under it: those cards are taken off the list
+  // (the lines themselves are never cards), including copies listed earlier in the thread.
+  const exCue = /\b(exclude|excluding|remove|removing|take (them |these |those )?(off|out)|skip|drop|dropping|cancel|delete|leave (them |these |those )?(off|out)|don'?t (need|want)|no longer (want|need)|without)\b/i;
+  const excluded = new Set(), tl = text.split(/\r?\n/);   // (read from the full text: the cue line may mention a $ amount)
+  tl.forEach((l, i) => {
+    if (!exCue.test(l) || !/:\s*$/.test(l.trim())) return;
+    let began = false;
+    for (let j = i + 1; j < tl.length; j++) {
+      const t = tl[j].trim();
+      if (!t) { if (began) break; continue; }   // a blank line may separate the sentence from its list; a blank after the list ends it
+      if (/[.!?:]$/.test(t) || t.split(/\s+/).length > 10) break;
+      began = true;
+      const nm = spell(t.replace(/^\s*[-*•·>]+\s*/, '').replace(/^\d{1,3}[.)]\s+/, '').replace(/^\d{1,3}\s*[x×]?\s+/, '').replace(/\s*[([].*$/, ''));
+      if (nm) excluded.add(nm);
+    }
+  });
   let prev = -1, last = -1;
   rl.forEach((l, i) => { const t = l.trim(); if (!t) return; if (prev >= 0 && closing.test(rl[prev].trim()) && plain(t)) sig.add(i); prev = i; last = i; });
   if (last > 0 && plain(rl[last]) && (!rl[last - 1].trim() || /^[-–—~]/.test(rl[last].trim())) && rl.filter((l, i) => i !== last && looksLikeCard(l)).length >= 2) sig.add(last);   // (a one- or two-card list keeps its last line)
@@ -1243,10 +1287,12 @@ function mailParse(m) {
   let cand = rl.filter((l, i) => (!sig.has(i) || idx.has(norm(l))) && !names.has(l.trim().toLowerCase().replace(/^[-–—~\s]+|[,.!\s]+$/g, ''))).filter(looksLikeCard);
   const withQty = cand.filter(l => /^\s*[-*•]?\s*\d{1,3}\s*[x×]?\s+\S/.test(l) || /\S\s*[x×]\s*\d{1,3}\s*$/i.test(l));
   if (withQty.length) cand = withQty;
-  const cards = parseWantList(cand.join('\n')).map(c => ({ qty: c.qty, name: c.name, set: c.set }));
+  const allCards = parseWantList(cand.join('\n')).map(c => ({ qty: c.qty, name: c.name, set: c.set }));
+  const cards = allCards.filter(c => !excluded.has(spell(c.name.replace(/\s*[([].*$/, ''))));
+  const exCount = allCards.length - cards.length;
   // No "name:" in the email: the name on their Gmail/sender account is the customer name (not a bare email address).
   const gname = d.fromName && !/@/.test(d.fromName) ? d.fromName.replace(/\s+/g, ' ').trim() : '';
-  const out = { customer: info.cust || gname, cards, perCardBudget: parseMoney(info.card), overallBudget: parseMoney(info.total), noBudget, foils: info.foil == null ? null : (info.foil ? 'yes' : 'no'), notes: info.notes || '', fromName: d.fromName || '' };
+  const out = { customer: info.cust || gname, cards, perCardBudget: parseMoney(info.card), overallBudget: parseMoney(info.total), noBudget, foils: info.foil == null ? null : (info.foil ? 'yes' : 'no'), notes: info.notes || '', fromName: d.fromName || '', excluded: exCount };
   out.missing = [];
   if (!out.customer) out.missing.push('name');
   if (out.perCardBudget == null && out.overallBudget == null && !noBudget) out.missing.push('budget');
@@ -1268,6 +1314,7 @@ function renderInbox() {
     if (d.overallBudget != null) bits.push(money(d.overallBudget) + ' total');
     else if (d.noBudget) bits.push('no budget limit');
     if (d.foils) bits.push(d.foils === 'yes' ? 'foils OK' : 'no foils');
+    if (d.excluded) bits.push(d.excluded + ' removed by the customer');
     const when = m.received ? new Date(m.received).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
     return `<div class="irow${S.email.thread === m.thread ? ' cur' : ''}" data-t="${esc(m.thread)}">
       <div class="imain"><b>${esc(d.customer || d.fromName || m.from || 'Unknown sender')}</b> <span class="muted">${esc(m.subject)} · ${esc(when)}</span><br>${chip} <span class="muted">${esc(bits.join(' · '))}</span></div>
