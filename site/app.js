@@ -344,6 +344,7 @@ function setTab(tab) {
   renderAll();
   if (tab === 'history') renderHistory();
   if (tab === 'missing') loadMissing();
+  if (tab === 'email') openInbox();
   if (tab === 'orders') { if (!S.ordersLoaded) setOrderRange('today'); loadOrders(); }   // fresh every time it's opened
 }
 function currentTab() { return (document.querySelector('.tabs button.on') || {}).dataset.tab; }
@@ -703,7 +704,7 @@ async function onMissingClick(e) {
 // customer gets a PDF named after them.
 const E_ORANGE = 'orange', E_RED = 'red', E_BLUE = 'blue';   // blue = foil
 const parseMoney = v => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
-function emailBlank() { return { cust: '', card: '', total: '', foil: false, notes: '', text: '', lines: [] }; }
+function emailBlank() { return { cust: '', card: '', total: '', foil: false, notes: '', text: '', lines: [], thread: '', subject: '' }; }
 function saveEmail() { ls.set('emaildraft', JSON.stringify(S.email)); }
 
 // Order details typed among the cards, in any order and any reasonable wording:
@@ -889,6 +890,8 @@ function emailFormOut() {
   $('#ecust').value = em.cust; $('#ecard').value = em.card; $('#etotal').value = em.total;
   $('#efoil').checked = em.foil; $('#enotes').value = em.notes; $('#elist').value = em.text;
   $('#elastpdf').hidden = !ls.get('emaillast');
+  const th = $('#ethread');
+  if (th) { th.hidden = !em.thread; th.innerHTML = em.thread ? `From the customer email: <b>${esc(em.subject || 'email')}</b> · <a href="${esc(gmailUrl(em.thread))}" target="_blank" rel="noopener">Open in Gmail ↗</a>. Completing this order also marks the email complete.` : ''; }
 }
 
 // Closest real card name by spelling, for typos Scryfall's fuzzy search gives up on ("sol rnig" → Sol Ring).
@@ -1049,7 +1052,7 @@ async function completeEmailOrder() {
   S.emailBusy = true; renderEmail();
   let j;
   try {
-    j = await api('sell', { who: S.who, customer: em.cust, rows: take.map(r => ({ id: r.o.meta.id, finish: r.o.finish, qty: r.have, price: r.price, meta: { name: r.o.meta.name, set: r.o.meta.set, setName: r.o.meta.setName, cn: r.o.meta.cn } })) });
+    j = await api('sell', { who: S.who, customer: em.cust, emailThread: em.thread || '', rows: take.map(r => ({ id: r.o.meta.id, finish: r.o.finish, qty: r.have, price: r.price, meta: { name: r.o.meta.name, set: r.o.meta.set, setName: r.o.meta.setName, cn: r.o.meta.cn } })) });
   } catch (e) {
     S.emailBusy = false; renderEmail();
     toast('Order NOT saved: ' + e.message.replace(/\.$/, '') + '. Nothing was removed from inventory.');
@@ -1070,8 +1073,12 @@ async function completeEmailOrder() {
   }
   const done = { order: j.order, n: j.customerN || 1, cust: em.cust, time: new Date().toISOString(), rows: pdfRows, total: pdfRows.reduce((n, x) => n + (x.given ? x.total : 0), 0), budget: c.totalB };
   ls.set('emaillast', JSON.stringify(done));
+  const fromEmail = !!em.thread;
   S.email = emailBlank(); saveEmail(); emailFormOut();
   S.emailBusy = false; renderEmail();
+  if (fromEmail) {
+    if (j.emailDone) loadInbox(false); else toast('Order saved, but the email could not be marked complete in Gmail. Use "Mark complete" on it.');
+  }
   const removed = pdfRows.filter(x => x.given).reduce((n, x) => n + x.qty, 0);
   $('#emodal').innerHTML = `<div class="box" role="dialog" aria-label="Order complete"><h2>Order #${esc(done.order)} complete</h2>
     <p>${esc(done.cust)}: <b>${money(done.total)}</b>, ${removed} card${removed === 1 ? '' : 's'} removed from inventory.</p>
@@ -1131,6 +1138,94 @@ async function downloadEmailPdf() {
   let d; try { d = JSON.parse(ls.get('emaillast')); } catch (e) {}
   if (!d) { toast('No completed email order on this computer yet'); return; }
   try { await emailPdf(d); } catch (e) { toast('PDF failed: ' + e.message); }
+}
+
+/* ---------- customer emails (Gmail label "lists") ---------- */
+// The backend reads Gmail and Claude parses each thread; here we show the To do list, load one into the Email
+// orders form (then it prices like a pasted list), and mark emails complete (which labels them in Gmail).
+const gmailUrl = id => 'https://mail.google.com/mail/u/0/#all/' + id;
+S.inbox = { emails: [], hasKey: true, lastSync: 0, syncError: '', loaded: false, busy: false };
+
+async function loadInbox(sync) {
+  if (!$('#einbox')) return;
+  const I = S.inbox;
+  if (sync) { I.busy = true; renderInbox(); }
+  try {
+    const j = await api(sync ? 'emailSync' : 'emails', {});
+    Object.assign(I, { emails: j.emails, hasKey: j.hasKey, lastSync: j.lastSync, syncError: j.syncError, loaded: true });
+  } catch (e) { I.syncError = 'Could not load emails: ' + e.message; }
+  I.busy = false; renderInbox();
+}
+
+// Opening the tab shows what is stored straight away, then looks at Gmail if the last look was a while ago.
+async function openInbox() {
+  await loadInbox(false);
+  if (Date.now() - S.inbox.lastSync > 5 * 60000 && !S.inbox.busy) loadInbox(true);
+}
+
+function renderInbox() {
+  const I = S.inbox, box = $('#einbox'); if (!box) return;
+  const ago = I.lastSync ? new Date(I.lastSync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'not yet';
+  const rows = I.emails.map(m => {
+    const d = m.data || {}, miss = m.missing || [];
+    const chip = m.checklist === 'complete' ? '<span class="chip ok">Checklist complete</span>'
+      : m.checklist === 'error' ? '<span class="chip err">Could not read</span>'
+      : `<span class="chip need">Checklist needed</span>${miss.length ? ` <span class="muted">missing: ${esc(miss.join(', '))}</span>` : ''}`;
+    const bits = [];
+    if (d.cards) bits.push(`${d.cards.reduce((n, c) => n + c.qty, 0)} card${d.cards.length === 1 && d.cards[0].qty === 1 ? '' : 's'}`);
+    if (d.perCardBudget != null) bits.push(money(d.perCardBudget) + ' per card');
+    if (d.overallBudget != null) bits.push(money(d.overallBudget) + ' total');
+    else if (d.noBudget) bits.push('no budget limit');
+    if (d.foils) bits.push(d.foils === 'yes' ? 'foils OK' : 'no foils');
+    const when = m.received ? new Date(m.received).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+    return `<div class="irow${S.email.thread === m.thread ? ' cur' : ''}" data-t="${esc(m.thread)}">
+      <div class="imain"><b>${esc(d.customer || m.from || 'Unknown sender')}</b> <span class="muted">${esc(m.subject)} · ${esc(when)}</span><br>${chip} <span class="muted">${d.error ? esc(d.error) : esc(bits.join(' · '))}</span></div>
+      <div class="iact"><button data-i="open" ${d.cards && d.cards.length ? '' : 'disabled'}>Open</button><a href="${esc(gmailUrl(m.thread))}" target="_blank" rel="noopener" class="hint">Gmail ↗</a><button data-i="done" title="Remove from To do and label it complete in Gmail">Mark complete</button></div></div>`;
+  }).join('');
+  box.innerHTML = `<div class="ihead"><b>To do: customer emails</b> <span class="muted">${I.emails.length} waiting · checked ${esc(ago)}</span>
+    <button data-i="sync" ${I.busy ? 'disabled' : ''}>${I.busy ? 'Checking Gmail…' : 'Refresh'}</button>${I.hasKey ? '' : '<button data-i="key" class="primary">Set up AI key</button>'}</div>
+    ${I.syncError ? `<p class="note err">${esc(I.syncError)}</p>` : ''}
+    ${rows || `<p class="note">${I.loaded ? 'No emails waiting. Label an email "lists" in Gmail and it shows up here.' : 'Loading…'}</p>`}`;
+}
+
+async function onInboxClick(e) {
+  const b = e.target.closest('[data-i]'); if (!b) return;
+  const act = b.dataset.i, row = b.closest('.irow'), m = row ? S.inbox.emails.find(x => x.thread === row.dataset.t) : null;
+  if (act === 'sync') return loadInbox(true);
+  if (act === 'key') {
+    const k = prompt('Paste the Anthropic API key (starts with sk-ant-). It is stored only in the store\'s Google Apps Script and is used only to read emails.');
+    if (!k) return;
+    try { const j = await api('emailSetKey', { key: k.trim() }); S.inbox.hasKey = j.hasKey; toast('Key saved. Checking emails…'); loadInbox(true); }
+    catch (x) { toast('Key not saved: ' + x.message); }
+    return;
+  }
+  if (!m) return;
+  if (act === 'done') {
+    if (!confirm(`Mark this email complete?\n\n${(m.data && m.data.customer) || m.from} · ${m.subject}\n\nIt leaves the To do list and gets the "complete" label in Gmail. Inventory is not changed.`)) return;
+    b.disabled = true;
+    try {
+      const j = await api('emailDone', { thread: m.thread });
+      Object.assign(S.inbox, { emails: j.emails, hasKey: j.hasKey, lastSync: j.lastSync, syncError: j.syncError });
+      if (S.email.thread === m.thread) { S.email.thread = ''; S.email.subject = ''; saveEmail(); emailFormOut(); }
+      renderInbox();
+      toast(j.gmail === 'ok' ? 'Marked complete (Gmail label added)' : 'Marked complete here, but Gmail said: ' + j.gmail);
+    } catch (x) { b.disabled = false; toast('Not marked: ' + x.message); }
+    return;
+  }
+  if (act === 'open') loadEmailOrder(m);
+}
+
+// Fill the Email orders form from a parsed email, then run the normal list check.
+async function loadEmailOrder(m) {
+  const d = m.data || {};
+  if ((S.email.lines.length || S.email.text.trim()) && S.email.thread !== m.thread && !confirm('Replace the order you are working on with this email?')) return;
+  const line = c => `${c.qty} ${c.name}` + (/^[a-z0-9]{2,5}$/i.test(c.set || '') ? ` (${c.set})` : '');
+  S.email = { ...emailBlank(), thread: m.thread, subject: m.subject, cust: d.customer || '', card: d.perCardBudget != null ? String(d.perCardBudget) : '', total: d.overallBudget != null ? String(d.overallBudget) : '',
+    foil: d.foils === 'yes', notes: d.notes || '', text: (d.cards || []).map(line).join('\n') };
+  saveEmail(); emailFormOut(); renderInbox();
+  const miss = (m.missing || []);
+  if (miss.length) toast('Checklist still needed: ' + miss.join(', '));
+  await checkEmailList();
 }
 
 /* ---------- past orders ---------- */
@@ -1307,6 +1402,8 @@ async function init() {
       toast('Email order cleared');
     });
     $('#elastpdf').addEventListener('click', downloadEmailPdf);
+    $('#einbox').addEventListener('click', onInboxClick);
+    renderInbox();
     // Budget and foil answers re-check the table straight away; the rest is just saved.
     ['#ecust', '#ecard', '#etotal', '#efoil', '#enotes', '#elist'].forEach(s => $(s).addEventListener('input', debounce(() => { emailFormIn(); saveEmail(); renderEmail(); }, 250)));
     $('#efoil').addEventListener('change', () => { emailFormIn(); saveEmail(); renderEmail(); });

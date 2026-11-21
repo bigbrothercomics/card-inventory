@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#ffffff">
-<link rel="stylesheet" href="app.css?v=19">
+<link rel="stylesheet" href="app.css?v=20">
 </head>
 <body data-mode="sell">
 <header>
@@ -44,6 +44,8 @@
 
 
   <section id="v-email" hidden>
+    <div class="inbox" id="einbox"></div>
+    <p class="note" id="ethread" hidden></p>
     <div class="eform">
       <label>Customer name<input type="text" id="ecust" placeholder="e.g. Jane Doe" size="22"></label>
       <label>Per-card budget $<input type="text" id="ecard" inputmode="decimal" placeholder="none" size="7"></label>
@@ -87,7 +89,7 @@
 
 <script src="config.js"></script>
 <script src="boxes.js?v=17"></script>
-<script src="app.js?v=19"></script>
+<script src="app.js?v=20"></script>
 <script src="account.js?v=18"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});</script>
 </body>
