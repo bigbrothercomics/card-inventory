@@ -13,8 +13,8 @@
  *   Account    the store's one username + salted password hash (created by the app's first-run "Create store profile")
  *
  * Sign-in: the app sends a long random session token (kept for years, see SESSION_IDLE_MS); only its hash is stored,
- * one Script Property per device (S_...). The Scryfall extension instead sends the extension key (Script Property
- * EXT_KEY, shown in the app under Account). If the password is forgotten, delete row 2 of the Account tab and
+ * one Script Property per device (S_...). The edit's author is always the signed-in username (set here, not by the app).
+ * The Scryfall extension instead sends the secret key built into it (checked against EXT_KEY_HASH), logged as "Scryfall". If the password is forgotten, delete row 2 of the Account tab and
  * create the profile again in the app (that also signs out every device).
  */
 
@@ -37,6 +37,8 @@ var PUBLIC_ACTIONS = { authStatus: 1, setup: 1, login: 1 };
 var EXT_ACTIONS = { inventory: 1, changes: 1, adjust: 1, lookup: 1, missing: 1, missingAdd: 1, missingRemove: 1 };
 var SESSION_IDLE_MS = 3650 * 86400000;   // a device stays signed in until it has gone unused for ~10 years
 var HASH_ROUNDS = 400;
+// The Scryfall extension has a secret key built into it (nobody types it). Only the hash is here: sha_('ext:' + key).
+var EXT_KEY_HASH = 'qLgh/zIl7OnZwBGb5OeG6IMfWB+w2BP1IF5GqxmqpUU=';
 
 function doGet() {
   return json_({ ok: true, service: 'card-inventory', time: new Date().toISOString() });
@@ -53,8 +55,9 @@ function doPost(e) {
     // extension does) the extension key. The extension's changes are always logged as "Scryfall".
     if (!PUBLIC_ACTIONS[body.action]) {
       var who = authorize_(body);
-      if (!who) return json_({ ok: false, needLogin: true, setup: !acct_(), error: 'Not signed in. In the app, sign in. In the Scryfall extension, enter the extension key (app: Account > Extension key).' });
-      if (who === 'ext') body.who = 'Scryfall';
+      if (!who) return json_({ ok: false, needLogin: true, setup: !acct_(), error: 'Not signed in. Sign in to the app, or update the Scryfall extension to the latest version.' });
+      // Who made the change is always decided here: the signed-in account's username, or "Scryfall" for the extension.
+      body.who = who.ext ? 'Scryfall' : who.user;
     }
     return json_(fn(body));
   } catch (err) {
@@ -331,8 +334,6 @@ var ACTIONS = {
       if (acct_()) throw new Error('A store profile already exists. Sign in instead');
       var salt = Utilities.getUuid(), now = new Date();
       acctTab_().getRange(2, 1, 1, ACCT_HEAD.length).setValues([[user, salt, hash_(salt, pw), now, now]]);
-      var props = PropertiesService.getScriptProperties();
-      if (!props.getProperty('EXT_KEY')) props.setProperty('EXT_KEY', newKey_());
       dropSessions_();
       return { ok: true, token: newSession_(), username: user };
     } finally { lock.releaseLock(); }
@@ -375,16 +376,6 @@ var ACTIONS = {
     return { ok: true, token: newSession_(), username: a.username };
   },
 
-  // The key the Scryfall extension uses (typed once into the extension's popup).
-  extKey: function () {
-    var props = PropertiesService.getScriptProperties(), k = props.getProperty('EXT_KEY');
-    if (!k) { k = newKey_(); props.setProperty('EXT_KEY', k); }
-    return { ok: true, key: k };
-  },
-  newExtKey: function () {
-    var k = newKey_(); PropertiesService.getScriptProperties().setProperty('EXT_KEY', k);
-    return { ok: true, key: k };
-  },
 };
 
 /* ---------- account helpers ---------- */
@@ -407,7 +398,6 @@ function acct_() {
 }
 function sha_(s) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8)); }
 function hash_(salt, pw) { var h = salt + ':' + pw; for (var i = 0; i < HASH_ROUNDS; i++) h = sha_(h + ':' + salt); return h; }
-function newKey_() { return Utilities.getUuid().replace(/-/g, '').slice(0, 24); }
 
 // One Script Property per device (S_<hash of its token>) holding when it was last used, so two devices signing
 // in or being used at the same moment can never overwrite each other.
@@ -427,21 +417,22 @@ function dropSessions_() {
   var props = PropertiesService.getScriptProperties();
   props.getKeys().forEach(function (k) { if (k.indexOf('S_') === 0) props.deleteProperty(k); });
 }
-// 'user' (signed-in app), 'ext' (Scryfall extension key, limited actions) or '' (neither).
+// {user: username} for a signed-in app, {ext: true} for the Scryfall extension (limited actions), or null.
 function authorize_(b) {
-  if (!acct_()) return '';
+  var a = acct_();
+  if (!a) return null;
   var props = PropertiesService.getScriptProperties();
   if (b.token) {
     var key = sessionKey_(b.token), v = Number(props.getProperty(key));
     if (v) {
       var now = Date.now();
       if (now - v > SESSION_IDLE_MS) props.deleteProperty(key);
-      else { if (now - v > 12 * 3600000) props.setProperty(key, String(now)); return 'user'; }
+      else { if (now - v > 12 * 3600000) props.setProperty(key, String(now)); return { user: a.username }; }
     }
   }
-  var ext = props.getProperty('EXT_KEY');
-  if (ext && b.code && String(b.code) === ext && EXT_ACTIONS[b.action]) return 'ext';
-  return '';
+  // The extension carries a secret key of its own (only its hash is kept here, so the public code doesn't give it away).
+  if (b.code && EXT_ACTIONS[b.action] && sha_('ext:' + String(b.code)) === EXT_KEY_HASH) return { ext: true };
+  return null;
 }
 
 function missTab_() {
